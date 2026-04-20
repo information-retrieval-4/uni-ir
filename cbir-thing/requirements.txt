@@ -1,0 +1,5 @@
+numpy
+opencv-python
+PyWavelets
+scipy
+Pillow
