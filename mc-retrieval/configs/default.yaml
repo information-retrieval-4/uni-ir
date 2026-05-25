@@ -11,8 +11,9 @@ data:
 model:
   embed_dim: 256              # shared embedding space dimensionality
   # voxel encoder
-  block_embed_dim: 64         # per-block embedding dimension
-  voxel_channels: [128, 256, 512]  # conv3d channel progression
+  block_embed_dim: 32          # per-block embedding dimension
+  voxel_channels: [64, 128, 256]   # conv3d channel progression 
+  dropout: 0.3
   # text encoder
   text_model: "all-MiniLM-L6-v2"
   freeze_text_encoder: true
@@ -21,7 +22,7 @@ model:
 training:
   batch_size: 128
   epochs: 50
-  lr_voxel: 1.0e-3
+  lr_voxel: 3.0e-4
   lr_text_proj: 1.0e-4
   weight_decay: 1.0e-4
   warmup_ratio: 0.05          # fraction of total steps for warmup
