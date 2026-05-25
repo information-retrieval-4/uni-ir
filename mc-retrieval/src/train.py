@@ -7,7 +7,7 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from dataset import create_dataloaders
@@ -68,7 +68,6 @@ def train_one_epoch(model, loader, criterion, optimizer, scheduler, device, augm
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        scheduler.step()
 
         total_loss += loss.item()
         num_batches += 1
@@ -124,12 +123,10 @@ def train(cfg: dict):
     optimizer = AdamW(param_groups, weight_decay=train_cfg["weight_decay"])
 
     total_steps = len(train_loader) * train_cfg["epochs"]
-    scheduler = OneCycleLR(
+    scheduler = CosineAnnealingLR(
         optimizer,
-        max_lr=[train_cfg["lr_voxel"], train_cfg["lr_text_proj"], train_cfg["lr_voxel"]],
-        total_steps=total_steps,
-        pct_start=train_cfg["warmup_ratio"],
-        anneal_strategy="cos",
+        T_max=train_cfg["epochs"],
+        eta_min=1e-6,
     )
 
     # --- training loop ---
@@ -152,12 +149,16 @@ def train(cfg: dict):
         val_loss = validate(model, val_loader, criterion, device)
 
         elapsed = time.time() - t0
+        lr_current = optimizer.param_groups[0]['lr']
         print(
             f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
             f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
             f"τ={criterion.temperature.item():.4f}  "
+            f"lr={lr_current:.2e}  "
             f"time={elapsed:.1f}s"
         )
+
+        scheduler.step()
 
         # checkpointing
         if val_loss < best_val_loss:
