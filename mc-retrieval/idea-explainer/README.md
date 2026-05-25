@@ -1,12 +1,281 @@
-# Multimodal Minecraft Schematic Retrieval — Diagrams & Figures
+# Multimodal Minecraft Schematic Retrieval
+
+![alt text](concept_with_builds_1779750277264.png)
+
+## 1. Introduction
+
+Minecraft is home to one of the largest user-generated 3D content ecosystems in the world. Community platforms like [Planet Minecraft](https://www.planetminecraft.com/) host hundreds of thousands of player-created structures, castles, houses, pixel art, redstone contraptions, entire cities, shared as downloadable **schematics** (3D voxel grids of block IDs). But finding the right schematic is painful: search is keyword-based, tags are inconsistent, and there's no way to search by _structure_ or _vibe_.
+
+This project explores **cross-modal retrieval between natural language and 3D voxel structures** in the Minecraft domain. The idea: learn a shared embedding space where text descriptions ("medieval castle with towers") and 3D block grids live side-by-side, enabling semantic search in both directions.
+
+The approach draws from the CLIP paradigm, a dual-encoder architecture trained with symmetric InfoNCE loss, which is then adapted for a unique setting: discrete voxel grids (not point clouds or meshes), noisy community-authored text (not curated captions), and a relatively small dataset (~8K samples). A two-stage training pipeline first pretrains the voxel encoder via masked voxel modeling (self-supervised), then fine-tunes the full dual-encoder with contrastive learning.
+
+> [!NOTE]
+> This document serves as a comprehensive explainer of the project. Covering motivation, prior work, data, use cases, architecture, and training details. The technical sections include generated diagrams and mermaid flowcharts for visual reference.
 
 ---
 
-## 1. High-Level Concept
+## 2. Prior Works
+
+This section covers relevant prior work in cross-modal retrieval between text and 3D structures, 3D-language alignment, and related domains.
+
+---
+
+### 2a. TriCoLo — Trimodal Contrastive Loss for Text to Shape Retrieval
+
+**Ruan et al., WACV 2024** — [arXiv:2201.07366](https://arxiv.org/abs/2201.07366)
+
+TriCoLo tackles **text-to-3D shape retrieval** using a trimodal contrastive learning approach across text, multi-view images, and 3D voxels. The core insight: using rendered images as a **bridge modality** between text and 3D significantly improves retrieval, because image-text alignment is a more natural and better-studied problem than direct text-3D alignment.
+
+**Architecture:**
+
+- **Text encoder:** Bidirectional GRU
+- **3D encoder:** 3D CNN on colored voxels
+- **Image encoder:** MVCNN with pretrained ResNet18
+
+**Loss:** A sum of three pairwise InfoNCE losses aligning all modality pairs:
+
+```
+L_tri = L(voxel, image) + L(voxel, text) + L(image, text)
+```
+
+**Key results (Text2Shape benchmark):**
+
+| Model                        | RR@1       | RR@5       | NDCG@5     |
+| ---------------------------- | ---------- | ---------- | ---------- |
+| **Tri(I+V) — full trimodal** | **12.11%** | **32.39%** | **22.42%** |
+| Bi(V) — text+voxel only      | 8.98%      | 26.76%     | 17.99%     |
+
+**Relevance:** Directly comparable to our setup. TriCoLo also uses voxel-based 3D representations with contrastive alignment, and shows that simple contrastive objectives beat more complex architectures. The trimodal bridge idea is a potential future extension for our system (using rendered images of schematics as an additional modality).
+
+---
+
+### 2b. RI-Mamba — Rotation-Invariant Text-to-Shape Retrieval
+
+**Nguyen et al., 2026** — [arXiv:2602.11673](https://arxiv.org/abs/2602.11673)
+
+RI-Mamba is the **first rotation-invariant architecture based on State-Space Models (Mamba)** for text-to-3D retrieval. It addresses the realistic scenario where 3D objects appear in arbitrary orientations — existing methods assume canonical poses and break down under rotation.
+
+**Key technical components:**
+
+- **Local Reference Frames (LRFs):** Disentangle pose from intrinsic geometry at the input level
+- **Hilbert curve serialization:** Converts unordered point cloud patches into a spatially-coherent 1D sequence for Mamba processing
+- **FiLM-based orientation reintegration:** Recovers spatial context lost during LRF normalization
+- **CLIP-aligned contrastive learning** with automated triplet generation (no manual annotation)
+
+**Key results (OmniObject3D, 214 categories):**
+
+| Method         | mAP (canonical) | mAP (SO(3) rotated) |
+| -------------- | --------------- | ------------------- |
+| PointBERT-TAMM | 49.84           | ~22                 |
+| **RI-Mamba**   | **47.58**       | **47.50**           |
+
+Non-rotation-invariant methods collapse from ~50→22 under rotation. RI-Mamba holds steady at ~47.5.
+
+**Relevance:** Demonstrates state-of-the-art text→3D retrieval with a focus on robustness. The automated triplet generation strategy removes annotation bottlenecks — relevant for scaling our approach. Rotation invariance is less critical for Minecraft schematics (structures are typically axis-aligned), but the Mamba-based 3D encoding is an interesting alternative to our CNN approach.
+
+---
+
+### 2c. Invert3D — Aligning 3D Representations with Text Embeddings
+
+**Song et al., ACM MM 2025** — [arXiv:2508.16932](https://arxiv.org/abs/2508.16932)
+
+Invert3D proposes a **camera-conditioned inversion mechanism** that maps 3D scenes (NeRF / 3D Gaussian Splatting) into CLIP's text-aligned embedding space, enabling language-driven 3D editing without retraining.
+
+**Core mechanism:**
+
+- Renders multiple 2D views of a 3D scene from different camera poses
+- Processes views through a camera-conditioned inversion module
+- Produces a 3D embedding aligned with CLIP's vision-text space
+- Enables latent-space manipulation for text-guided personalization
+
+**Relevance:** While focused on editing/personalization rather than retrieval, the core technique of projecting 3D representations into a pre-aligned text embedding space is conceptually similar to our approach. The key insight — that you can leverage existing vision-language alignment (CLIP) as a bridge — is shared across many works in this space. However, Invert3D operates on continuous neural 3D representations, whereas our system uses discrete voxel grids.
+
+---
+
+### 2d. DreamCraft — Text-Guided 3D Generation in Minecraft
+
+**Earle et al., FDG 2024** — [arXiv:2404.15538](https://arxiv.org/abs/2404.15538)
+
+DreamCraft tackles **text-to-3D generation** (not retrieval) specifically in the Minecraft domain — making it the most domain-relevant prior work despite the different task formulation.
+
+**Approach:**
+
+- Uses a **quantized Neural Radiance Field** that learns to place discrete Minecraft block types during training (not post-hoc)
+- Optimized via **Score Distillation Sampling (SDS)** against a frozen text-to-image diffusion model
+- Adds **functional constraint losses**: block-type distribution targets and adjacency rules
+
+**Relevance:** DreamCraft is complementary to our retrieval approach. Where we find _existing_ builds matching a description, DreamCraft _generates new_ builds from scratch. Interesting future work could combine both: retrieve the closest existing schematic, then use generation to modify it toward the query. The paper also validates that the Minecraft domain has real demand for text-guided 3D interaction.
+
+> [!TIP]
+> DreamCraft uses no contrastive learning or embedding alignment — the text-3D connection is purely through SDS optimization against a diffusion model. This is a fundamentally different paradigm from our retrieval-based approach.
+
+---
+
+### 2e. VXP — Voxel-Cross-Pixel Place Recognition
+
+**Li et al., 3DV 2025** — [arXiv:2403.14594](https://arxiv.org/abs/2403.14594)
+
+VXP addresses **cross-modal place recognition** between 2D camera images and 3D LiDAR point clouds (voxelized). While the application domain (autonomous driving / localization) differs from ours, the technical approach to bridging a large modality gap is highly instructive.
+
+**Multi-stage training strategy:**
+
+1. **Global image pre-training** — learn distinctive 2D descriptors
+2. **Local correspondence alignment** — enforce feature similarity between spatially corresponding voxels and pixels via geometric projection
+3. **Global descriptor consistency** — align cross-modal global embeddings in a shared space
+
+**Key results (Oxford RobotCar):**
+
+| Direction | Recall@1 | Recall@1% |
+| --------- | -------- | --------- |
+| 2D → 3D   | 47.16%   | 71.72%    |
+| 3D → 2D   | 30.01%   | 56.09%    |
+
+**Relevance:** VXP's key takeaway for our project is that bridging a large modality gap benefits from **local-to-global alignment** rather than just contrasting global descriptors. Their multi-stage training (local features first, then global) parallels our two-stage approach (MVM pretraining for local voxel understanding first, then global contrastive alignment). The voxel-based 3D processing is also architecturally similar to our VoxelEncoder.
+
+---
+
+### Summary of Prior Work Landscape
+
+```mermaid
+graph TD
+    subgraph "Text ↔ 3D Retrieval (Direct)"
+        TR1["TriCoLo<br/>(Voxel + Image + Text)<br/>WACV 2024"]
+        TR2["RI-Mamba<br/>(Point Cloud + Text)<br/>2026"]
+    end
+
+    subgraph "3D-Language Alignment"
+        AL1["Invert3D<br/>(NeRF/3DGS → CLIP space)<br/>MM 2025"]
+    end
+
+    subgraph "Text → 3D Generation"
+        GEN1["DreamCraft<br/>(Minecraft NeRF + SDS)<br/>FDG 2024"]
+    end
+
+    subgraph "Cross-Modal 3D Retrieval (Other)"
+        CM1["VXP<br/>(Image ↔ LiDAR Voxels)<br/>3DV 2025"]
+    end
+
+    subgraph "Ours"
+        OURS["MC-Retrieval<br/>(Text ↔ Minecraft Voxels)<br/>CLIP-style + MVM"]
+    end
+
+    TR1 -.- |"shared: contrastive<br/>voxel encoding"| OURS
+    TR2 -.- |"shared: text→3D<br/>retrieval task"| OURS
+    AL1 -.- |"shared: 3D→text<br/>embedding alignment"| OURS
+    GEN1 -.- |"shared: Minecraft<br/>domain"| OURS
+    CM1 -.- |"shared: multi-stage<br/>voxel alignment"| OURS
+
+    style OURS fill:#7c3aed,stroke:#5b21b6,color:#fff
+    style TR1 fill:#2563eb,stroke:#1d4ed8,color:#fff
+    style TR2 fill:#2563eb,stroke:#1d4ed8,color:#fff
+    style AL1 fill:#059669,stroke:#047857,color:#fff
+    style GEN1 fill:#ea580c,stroke:#c2410c,color:#fff
+    style CM1 fill:#0891b2,stroke:#0e7490,color:#fff
+```
+
+> [!IMPORTANT]
+> Our work occupies a unique niche: **text ↔ discrete voxel retrieval in a creative/gaming domain**. Most prior text-3D retrieval work targets clean CAD models (ShapeNet) or real-world scans. Our dataset of noisy, diverse, community-created Minecraft schematics presents distinct challenges — highly variable quality, creative naming conventions, and a discrete block vocabulary — that aren't addressed by existing methods.
+
+---
+
+## 3. Data Source
+
+The dataset powering this system is a collection of **8,328 Minecraft schematics** scraped from [Planet Minecraft](https://www.planetminecraft.com/), one of the largest community hubs for user-created Minecraft content. Each record pairs a 3D voxel structure with rich user-authored metadata.
+
+### What's in the dataset
+
+| Feature                  | Type    | Description                                                            |
+| ------------------------ | ------- | ---------------------------------------------------------------------- |
+| `voxel_data`             | object  | Flattened 32×32×32 array of Minecraft block IDs — the raw 3D structure |
+| `title`                  | object  | User-given name (e.g. "Medieval Castle", "Cozy Treehouse")             |
+| `subtitle`               | object  | Short tagline or secondary title                                       |
+| `description`            | object  | Free-form HTML description written by the creator                      |
+| `tags`                   | object  | Community/creator-assigned category tags (JSON-serialized list)        |
+| `img`                    | object  | Thumbnail image URL                                                    |
+| `bigImgs`                | object  | Gallery image URLs (JSON-serialized)                                   |
+| `user`                   | object  | Creator username                                                       |
+| `date`                   | object  | Upload date                                                            |
+| `diamondCount`           | int64   | Community "diamond" upvotes                                            |
+| `views`                  | int64   | View count                                                             |
+| `downloads`              | int64   | Download count                                                         |
+| `comments`               | float64 | Number of comments                                                     |
+| `favorites`              | int64   | Favorite count                                                         |
+| `url`                    | object  | Original Planet Minecraft page URL                                     |
+| `downloadLink`           | object  | Primary download link                                                  |
+| `finalDownloadLink`      | object  | Resolved download link                                                 |
+| `thirdPartyDownloadLink` | object  | External mirror link                                                   |
+| `youtubeId`              | object  | Associated YouTube showcase video ID                                   |
+
+- **Format:** Apache Parquet (`data.parquet`, ~11 MB)
+- **Origin:** Originally collected by Romain Beaumont's [minecraft-schematics-dataset](https://github.com/rom1504/minecraft-schematics-dataset) project, reformatted into parquet for ease of use.
+
+### How the text modality is constructed
+
+The text input for each sample is assembled by concatenating four metadata fields:
+
+```
+title + subtitle + description (HTML-stripped) + tags
+```
+
+This produces a natural-language-ish description that captures the creator's intent, structural details, and categorical context, all without requiring any manual annotation.
+
+### Voxel representation
+
+Each schematic is stored as a flat array of block IDs representing a 32³ voxel grid. During preprocessing, the top-254 most frequent block types are kept (mapped to IDs 2–255), with `0 = air` and `1 = rare/other`. The grid is bounding-box cropped to the non-air region, then nearest-neighbor resized back to 32³.
+
+> [!NOTE]
+> The dataset is entirely **community-generated**. Structures range from tiny furniture pieces to sprawling castles, with highly variable quality, style, and complexity. This makes it a challenging but realistic benchmark for cross-modal retrieval.
+
+---
+
+## 4. Use Cases
+
+### 4a. Text-to-Build Search
+
+> _"I want a medieval castle with towers and a moat"_
+
+The most straightforward application: a player types a natural language description and the system retrieves the most similar schematics from the database, ranked by cosine similarity. This replaces the current keyword-based search on platforms like Planet Minecraft, which struggles with semantic queries (e.g. "cozy" or "futuristic" don't map to specific block types).
+
+### 4b. Build-to-Text Discovery (Reverse Search)
+
+Given a voxel structure (e.g. one you just built), retrieve the closest text descriptions, essentially asking _"what does this look like?"_ or _"what would someone call this?"_. Useful for:
+
+- Auto-generating titles/tags for uploads
+- Finding similar existing builds to compare against
+- Content moderation (detecting copies or near-duplicates)
+
+### 4c. Recommendation & Similarity Browsing
+
+Since both modalities live in the same embedding space, you can use voxel→voxel similarity to power a **"more like this"** recommendation system. A user clicks on a build they like, and the system finds structurally similar ones without relying on tags or metadata at all.
+
+### 4d. Content Organization & Clustering
+
+The learned embeddings can be used to **automatically cluster** the schematic database into semantic groups (castles, houses, vehicles, pixel art, redstone machines, etc.) without manual labeling. This enables:
+
+- Better browse/filter UIs for schematic repositories
+- Automatic category assignment for new uploads
+- Dataset curation and quality filtering
+
+### 4e. Creative Assistance & Inspiration
+
+Builders looking for inspiration can describe a vague concept and get back real examples that match the vibe. Unlike generation-based approaches (which create _new_ structures), retrieval surfaces _existing_ community creations, often with download links, tutorials, and creator commentary attached.
+
+### 4f. Integration with Minecraft Modding Tools
+
+The retrieval system could be embedded into:
+
+- **WorldEdit / Litematica plugins** — search and paste schematics from within the game
+- **Web-based schematic browsers** — semantic search API for community platforms
+- **Educational tools** — find example builds for teaching architectural or engineering concepts in Minecraft
+
+---
+
+## 5. High-Level Concept
 
 ![Cross-modal retrieval between text and 3D voxel structures in a shared embedding space](./concept_overview_v2_1779725761167.png)
 
-The core idea: learn a **shared embedding space** where text descriptions and 3D voxel structures live side-by-side — enabling cross-modal search in both directions.
+The core idea: learn a **shared embedding space** where text descriptions and 3D voxel structures live side-by-side, enabling cross-modal search in both directions.
 
 ```mermaid
 graph LR
@@ -48,7 +317,7 @@ graph LR
 
 ---
 
-## 2. Full System Flowchart
+## 6. Full System Flowchart
 
 End-to-end pipeline from raw data to retrieval results.
 
@@ -110,11 +379,11 @@ flowchart TD
 
 ---
 
-## 3. Model Architecture
+## 7. Model Architecture
 
 ![DualEncoder architecture with VoxelEncoder (3D CNN) and TextEncoder (frozen SentenceTransformer + projection)](./architecture_v2_1779725772833.png)
 
-### 3a. DualEncoder — Top-Level
+### 7a. DualEncoder — Top-Level
 
 ```mermaid
 flowchart LR
@@ -148,7 +417,7 @@ flowchart LR
 
 ---
 
-### 3b. VoxelEncoder — 3D CNN Pipeline
+### 7b. VoxelEncoder — 3D CNN Pipeline
 
 ```mermaid
 flowchart TD
@@ -192,7 +461,7 @@ flowchart TD
 
 ---
 
-### 3c. TextEncoder — Frozen Backbone + Learned Projection
+### 7c. TextEncoder — Frozen Backbone + Learned Projection
 
 ```mermaid
 flowchart TD
@@ -231,9 +500,9 @@ flowchart TD
 
 ---
 
-## 4. Training Mechanism
+## 8. Training Mechanism
 
-### 4a. Stage 1 — Masked Voxel Modeling (Self-Supervised Pretraining)
+### 8a. Stage 1 — Masked Voxel Modeling (Self-Supervised Pretraining)
 
 ![MVM pretraining: mask 20% non-air blocks, U-Net encoder-decoder reconstructs them](./mvm_pretraining_v2_1779725788186.png)
 
@@ -304,7 +573,7 @@ flowchart TD
 
 ---
 
-### 4b. Stage 2 — CLIP-Style Contrastive Fine-Tuning
+### 8b. Stage 2 — CLIP-Style Contrastive Fine-Tuning
 
 ![CLIP-style symmetric InfoNCE with similarity matrix and learnable temperature](./contrastive_training_v2_1779725800763.png)
 
@@ -374,7 +643,7 @@ flowchart TD
 
 ---
 
-### 4c. Two-Stage Training Overview
+### 8c. Two-Stage Training Overview
 
 ![Two-stage pipeline: MVM pretraining → weight transfer → contrastive fine-tuning → evaluation](./training_pipeline_v2_1779725813631.png)
 
@@ -416,7 +685,7 @@ flowchart LR
 
 ---
 
-## 5. Data Preprocessing Pipeline
+## 9. Data Preprocessing Pipeline
 
 ```mermaid
 flowchart TD
@@ -471,7 +740,7 @@ flowchart TD
 
 ---
 
-## 6. Key Hyperparameters Summary
+## 10. Key Hyperparameters Summary
 
 | Component                | Parameter        | Value            |
 | ------------------------ | ---------------- | ---------------- |
