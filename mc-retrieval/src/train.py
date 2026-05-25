@@ -55,7 +55,7 @@ def train_one_epoch(model, loader, criterion, optimizer, scheduler, device, augm
     num_batches = 0
 
     pbar = tqdm(loader, desc="  train", leave=False)
-    for texts, voxels in pbar:
+    for texts, voxels, _categories in pbar:
         voxels = voxels.to(device)
 
         if augment:
@@ -83,7 +83,7 @@ def validate(model, loader, criterion, device):
     total_loss = 0.0
     num_batches = 0
 
-    for texts, voxels in tqdm(loader, desc="  val  ", leave=False):
+    for texts, voxels, _categories in tqdm(loader, desc="  val  ", leave=False):
         voxels = voxels.to(device)
         text_emb, voxel_emb = model(texts, voxels)
         loss = criterion(text_emb, voxel_emb)

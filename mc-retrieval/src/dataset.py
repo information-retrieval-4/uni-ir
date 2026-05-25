@@ -87,11 +87,12 @@ def remap_voxel(voxel_flat, mapping: dict) -> torch.LongTensor:
 # ---------------------------------------------------------------------------
 
 class SchematicDataset(Dataset):
-    """Dataset of (text, voxel) pairs for contrastive learning."""
+    """Dataset of (text, voxel, category) tuples for contrastive learning."""
 
     def __init__(self, df: pd.DataFrame, block_mapping: dict):
         self.texts = [build_text(row) for _, row in df.iterrows()]
         self.voxels = df["voxel_data"].tolist()
+        self.categories = df["subtitle"].fillna("Unknown").tolist()
         self.block_mapping = block_mapping
 
     def __len__(self):
@@ -100,7 +101,8 @@ class SchematicDataset(Dataset):
     def __getitem__(self, idx):
         text = self.texts[idx]
         voxel = remap_voxel(self.voxels[idx], self.block_mapping)
-        return text, voxel
+        category = self.categories[idx]
+        return text, voxel, category
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +157,9 @@ def create_dataloaders(
     train_cfg = cfg["training"]
 
     def collate_fn(batch):
-        texts, voxels = zip(*batch)
+        texts, voxels, categories = zip(*batch)
         voxels = torch.stack(voxels)
-        return list(texts), voxels
+        return list(texts), voxels, list(categories)
 
     train_loader = DataLoader(
         ds_train,

@@ -20,7 +20,7 @@ model:
   text_hidden_dim: 384        # output dim of the sentence transformer
 
 training:
-  batch_size: 128
+  batch_size: 512
   epochs: 50
   lr_voxel: 3.0e-4
   lr_text_proj: 1.0e-4
