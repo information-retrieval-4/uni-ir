@@ -34,3 +34,10 @@ training:
 eval:
   recall_k: [1, 5, 10]
   batch_size: 256
+
+pretraining:
+  mask_ratio: 0.2             # fraction of non-air blocks to mask
+  epochs: 200
+  batch_size: 256
+  lr: 1.0e-3
+  checkpoint_dir: "checkpoints"

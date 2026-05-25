@@ -92,7 +92,7 @@ def validate(model, loader, criterion, device):
     return total_loss / max(num_batches, 1)
 
 
-def train(cfg: dict):
+def train(cfg: dict, pretrained_path: str = None):
     """Full training run."""
     set_seed(cfg["data"]["seed"])
     device = get_device()
@@ -107,6 +107,19 @@ def train(cfg: dict):
     criterion = CLIPLoss(
         temperature_init=cfg["training"]["temperature_init"]
     ).to(device)
+
+    # --- load pretrained voxel encoder weights ---
+    if pretrained_path and os.path.exists(pretrained_path):
+        print(f"Loading pretrained voxel encoder from {pretrained_path}")
+        ckpt = torch.load(pretrained_path, map_location=device, weights_only=False)
+        encoder_state = ckpt["encoder_state"]
+        # Load into voxel_encoder with strict=False (projection head won't match)
+        missing, unexpected = model.voxel_encoder.load_state_dict(
+            encoder_state, strict=False
+        )
+        print(f"  Loaded pretrained weights — missing: {len(missing)}, unexpected: {len(unexpected)}")
+        if missing:
+            print(f"  Missing keys (will train from scratch): {missing}")
 
     # count params
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -207,7 +220,9 @@ def train(cfg: dict):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train multimodal MC retrieval model")
     parser.add_argument("--config", type=str, default="configs/default.yaml")
+    parser.add_argument("--pretrained", type=str, default=None,
+                        help="Path to pretrained voxel encoder checkpoint (from pretrain.py)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    train(cfg)
+    train(cfg, pretrained_path=args.pretrained)
