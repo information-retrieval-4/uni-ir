@@ -1,0 +1,35 @@
+# Multimodal MC Schematic Retrieval — Default Config
+
+data:
+  parquet_path: "data/data.parquet"
+  max_block_types: 256        # keep top-N most frequent block IDs, rest → <rare>
+  text_max_length: 256        # max tokens for text encoder
+  val_split: 0.1
+  test_split: 0.1
+  seed: 42
+
+model:
+  embed_dim: 256              # shared embedding space dimensionality
+  # voxel encoder
+  block_embed_dim: 64         # per-block embedding dimension
+  voxel_channels: [128, 256, 512]  # conv3d channel progression
+  # text encoder
+  text_model: "all-MiniLM-L6-v2"
+  freeze_text_encoder: true
+  text_hidden_dim: 384        # output dim of the sentence transformer
+
+training:
+  batch_size: 128
+  epochs: 50
+  lr_voxel: 1.0e-3
+  lr_text_proj: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_ratio: 0.05          # fraction of total steps for warmup
+  temperature_init: 0.07      # learnable temperature init
+  early_stopping_patience: 7
+  num_workers: 2
+  checkpoint_dir: "checkpoints"
+  
+eval:
+  recall_k: [1, 5, 10]
+  batch_size: 256
