@@ -2,26 +2,26 @@
 
 data:
   parquet_path: "data/data.parquet"
-  max_block_types: 256        # keep top-N most frequent block IDs, rest → <rare>
-  text_max_length: 256        # max tokens for text encoder
-  crop_bbox: true             # crop to bounding box before resizing
+  max_block_types: 256 # keep top-N most frequent block IDs, rest → <rare>
+  text_max_length: 256 # max tokens for text encoder
+  crop_bbox: true # crop to bounding box before resizing
   val_split: 0.1
   test_split: 0.1
   seed: 42
 
 model:
-  embed_dim: 256              # shared embedding space dimensionality
+  embed_dim: 256 # shared embedding space dimensionality
   # voxel encoder
-  use_learned_stem: true
-  use_depthwise_separable: true
-  use_depthwise_separable_decoder: true
-  block_embed_dim: 32          # per-block embedding dimension
-  voxel_channels: [64, 128, 256]   # conv3d channel progression 
+  use_learned_stem: false
+  use_depthwise_separable: false
+  use_depthwise_separable_decoder: false
+  block_embed_dim: 32 # per-block embedding dimension
+  voxel_channels: [64, 128, 256] # conv3d channel progression
   dropout: 0.3
   # text encoder
   text_model: "all-MiniLM-L6-v2"
   freeze_text_encoder: true
-  text_hidden_dim: 384        # output dim of the sentence transformer
+  text_hidden_dim: 384 # output dim of the sentence transformer
 
 training:
   batch_size: 256
@@ -29,18 +29,18 @@ training:
   lr_voxel: 3.0e-4
   lr_text_proj: 1.0e-4
   weight_decay: 1.0e-4
-  warmup_ratio: 0.05          # fraction of total steps for warmup
-  temperature_init: 0.07      # learnable temperature init
+  warmup_ratio: 0.05 # fraction of total steps for warmup
+  temperature_init: 0.07 # learnable temperature init
   early_stopping_patience: 15
   num_workers: 2
   checkpoint_dir: "checkpoints"
-  
+
 eval:
   recall_k: [1, 5, 10]
   batch_size: 256
 
 pretraining:
-  mask_ratio: 0.2             # fraction of non-air blocks to mask
+  mask_ratio: 0.2 # fraction of non-air blocks to mask
   epochs: 200
   batch_size: 256
   lr: 1.0e-3
