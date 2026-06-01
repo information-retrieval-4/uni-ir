@@ -14,6 +14,7 @@ model:
   # voxel encoder
   use_learned_stem: true
   use_depthwise_separable: true
+  use_depthwise_separable_decoder: true
   block_embed_dim: 32          # per-block embedding dimension
   voxel_channels: [64, 128, 256]   # conv3d channel progression 
   dropout: 0.3
