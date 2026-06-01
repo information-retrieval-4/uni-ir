@@ -28,11 +28,19 @@ from model import DepthwiseSeparableConv3d
 # Dataset (voxel-only, no text needed)
 # ---------------------------------------------------------------------------
 
+
 class VoxelOnlyDataset(Dataset):
     """Dataset that returns only voxel grids for self-supervised pretraining."""
 
-    def __init__(self, df: pd.DataFrame, block_mapping: dict, crop_bbox: bool = True,
-                 augment: bool = False, aug_apply_prob: float = 0.5, aug_dropout_prob: float = 0.05):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        block_mapping: dict,
+        crop_bbox: bool = True,
+        augment: bool = False,
+        aug_apply_prob: float = 0.5,
+        aug_dropout_prob: float = 0.05,
+    ):
         self.voxels = df["voxel_data"].tolist()
         self.block_mapping = block_mapping
         self.crop_bbox = crop_bbox
@@ -44,18 +52,23 @@ class VoxelOnlyDataset(Dataset):
         return len(self.voxels)
 
     def __getitem__(self, idx):
-        voxel = remap_voxel(self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox)
+        voxel = remap_voxel(
+            self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox
+        )
         if self.augment:
             import random
+
             # 1. Random 90-degree rotations in the horizontal plane (assuming axes 0 and 2 are X and Z)
             k = random.randint(0, 3)
             if k > 0:
                 voxel = torch.rot90(voxel, k, [0, 2])
-                
+
             # 2. Block dropout
             if random.random() < self.aug_apply_prob:
                 non_air_mask = voxel != 0
-                drop_mask = torch.rand_like(voxel, dtype=torch.float) < self.aug_dropout_prob
+                drop_mask = (
+                    torch.rand_like(voxel, dtype=torch.float) < self.aug_dropout_prob
+                )
                 voxel[non_air_mask & drop_mask] = 0
         return voxel
 
@@ -63,6 +76,7 @@ class VoxelOnlyDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Masking
 # ---------------------------------------------------------------------------
+
 
 def create_mask(voxels: torch.LongTensor, mask_ratio: float = 0.2):
     """Randomly mask non-air blocks.
@@ -75,17 +89,16 @@ def create_mask(voxels: torch.LongTensor, mask_ratio: float = 0.2):
         masked_voxels: (B, 32, 32, 32) with masked positions set to mask_token_id
         mask: (B, 32, 32, 32) bool tensor indicating masked positions
     """
-    non_air = voxels != 0                                       # (B, 32, 32, 32)
+    non_air = voxels != 0  # (B, 32, 32, 32)
     rand = torch.rand_like(voxels, dtype=torch.float32)
     mask = non_air & (rand < mask_ratio)
     return mask
 
 
-# (Old batch-level augment_voxels removed in favor of dataset-level augmentations)
-
 # ---------------------------------------------------------------------------
 # Model: U-Net style encoder-decoder
 # ---------------------------------------------------------------------------
+
 
 class MaskedVoxelModel(nn.Module):
     """U-Net encoder-decoder for masked block prediction.
@@ -107,15 +120,19 @@ class MaskedVoxelModel(nn.Module):
     ):
         super().__init__()
         self.num_block_types = num_block_types
-        self.mask_token_id = num_block_types   # extra token for [MASK]
+        self.mask_token_id = num_block_types  # extra token for [MASK]
         self.mask_ratio = mask_ratio
         self.use_learned_stem = use_learned_stem
 
         # +1 for mask token
         self.block_embedding = nn.Embedding(num_block_types + 1, block_embed_dim)
 
-        conv_enc_cls = DepthwiseSeparableConv3d if use_depthwise_separable else nn.Conv3d
-        conv_dec_cls = DepthwiseSeparableConv3d if use_depthwise_separable_decoder else nn.Conv3d
+        conv_enc_cls = (
+            DepthwiseSeparableConv3d if use_depthwise_separable else nn.Conv3d
+        )
+        conv_dec_cls = (
+            DepthwiseSeparableConv3d if use_depthwise_separable_decoder else nn.Conv3d
+        )
 
         # --- Encoder (mirrors VoxelEncoder.conv_stack) ---
         if use_learned_stem:
@@ -194,8 +211,8 @@ class MaskedVoxelModel(nn.Module):
         masked_voxels[mask] = self.mask_token_id
 
         # Embed
-        x = self.block_embedding(masked_voxels)          # (B, 32, 32, 32, D)
-        x = x.permute(0, 4, 1, 2, 3).contiguous()        # (B, D, 32, 32, 32)
+        x = self.block_embedding(masked_voxels)  # (B, 32, 32, 32, D)
+        x = x.permute(0, 4, 1, 2, 3).contiguous()  # (B, D, 32, 32, 32)
 
         if self.use_learned_stem:
             e_in = self.stem(x)
@@ -228,8 +245,9 @@ class MaskedVoxelModel(nn.Module):
         state = {}
 
         # Block embedding (drop mask token)
-        state["block_embedding.weight"] = \
-            self.block_embedding.weight[:self.num_block_types].clone()
+        state["block_embedding.weight"] = self.block_embedding.weight[
+            : self.num_block_types
+        ].clone()
 
         offset = 0
         if self.use_learned_stem:
@@ -241,7 +259,9 @@ class MaskedVoxelModel(nn.Module):
             state["conv_stack.1.bias"] = stem_bn.bias.clone()
             state["conv_stack.1.running_mean"] = stem_bn.running_mean.clone()
             state["conv_stack.1.running_var"] = stem_bn.running_var.clone()
-            state["conv_stack.1.num_batches_tracked"] = stem_bn.num_batches_tracked.clone()
+            state["conv_stack.1.num_batches_tracked"] = (
+                stem_bn.num_batches_tracked.clone()
+            )
             offset = 3
 
         mapping = {
@@ -253,22 +273,34 @@ class MaskedVoxelModel(nn.Module):
         for block_name, stack_offset in mapping.items():
             block = getattr(self, block_name)
             conv = block[0]
-            
+
             if isinstance(conv, DepthwiseSeparableConv3d):
-                state[f"conv_stack.{stack_offset}.depthwise.weight"] = conv.depthwise.weight.clone()
-                state[f"conv_stack.{stack_offset}.depthwise.bias"] = conv.depthwise.bias.clone()
-                state[f"conv_stack.{stack_offset}.pointwise.weight"] = conv.pointwise.weight.clone()
-                state[f"conv_stack.{stack_offset}.pointwise.bias"] = conv.pointwise.bias.clone()
+                state[f"conv_stack.{stack_offset}.depthwise.weight"] = (
+                    conv.depthwise.weight.clone()
+                )
+                state[f"conv_stack.{stack_offset}.depthwise.bias"] = (
+                    conv.depthwise.bias.clone()
+                )
+                state[f"conv_stack.{stack_offset}.pointwise.weight"] = (
+                    conv.pointwise.weight.clone()
+                )
+                state[f"conv_stack.{stack_offset}.pointwise.bias"] = (
+                    conv.pointwise.bias.clone()
+                )
             else:
                 state[f"conv_stack.{stack_offset}.weight"] = conv.weight.clone()
                 state[f"conv_stack.{stack_offset}.bias"] = conv.bias.clone()
-                
+
             bn = block[1]
             state[f"conv_stack.{stack_offset + 1}.weight"] = bn.weight.clone()
             state[f"conv_stack.{stack_offset + 1}.bias"] = bn.bias.clone()
-            state[f"conv_stack.{stack_offset + 1}.running_mean"] = bn.running_mean.clone()
+            state[f"conv_stack.{stack_offset + 1}.running_mean"] = (
+                bn.running_mean.clone()
+            )
             state[f"conv_stack.{stack_offset + 1}.running_var"] = bn.running_var.clone()
-            state[f"conv_stack.{stack_offset + 1}.num_batches_tracked"] = bn.num_batches_tracked.clone()
+            state[f"conv_stack.{stack_offset + 1}.num_batches_tracked"] = (
+                bn.num_batches_tracked.clone()
+            )
 
         return state
 
@@ -276,6 +308,7 @@ class MaskedVoxelModel(nn.Module):
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
+
 
 def pretrain(cfg: dict):
     """Run masked voxel modeling pretraining."""
@@ -304,8 +337,14 @@ def pretrain(cfg: dict):
     aug_apply_prob = cfg["data"].get("aug_apply_prob", 0.5)
     aug_dropout_prob = cfg["data"].get("aug_dropout_prob", 0.05)
 
-    dataset = VoxelOnlyDataset(df, block_mapping, crop_bbox=crop_bbox, 
-                               augment=augment, aug_apply_prob=aug_apply_prob, aug_dropout_prob=aug_dropout_prob)
+    dataset = VoxelOnlyDataset(
+        df,
+        block_mapping,
+        crop_bbox=crop_bbox,
+        augment=augment,
+        aug_apply_prob=aug_apply_prob,
+        aug_dropout_prob=aug_dropout_prob,
+    )
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -325,7 +364,9 @@ def pretrain(cfg: dict):
         mask_ratio=mask_ratio,
         use_learned_stem=model_cfg.get("use_learned_stem", False),
         use_depthwise_separable=model_cfg.get("use_depthwise_separable", False),
-        use_depthwise_separable_decoder=model_cfg.get("use_depthwise_separable_decoder", False),
+        use_depthwise_separable_decoder=model_cfg.get(
+            "use_depthwise_separable_decoder", False
+        ),
     ).to(device)
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -414,7 +455,9 @@ def pretrain(cfg: dict):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pretrain voxel encoder via masked voxel modeling")
+    parser = argparse.ArgumentParser(
+        description="Pretrain voxel encoder via masked voxel modeling"
+    )
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     args = parser.parse_args()
 
