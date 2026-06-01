@@ -108,12 +108,16 @@ def remap_voxel(voxel_flat, mapping: dict, crop_bbox: bool = True,
 class SchematicDataset(Dataset):
     """Dataset of (text, voxel, category) tuples for contrastive learning."""
 
-    def __init__(self, df: pd.DataFrame, block_mapping: dict, crop_bbox: bool = True):
+    def __init__(self, df: pd.DataFrame, block_mapping: dict, crop_bbox: bool = True, 
+                 augment: bool = False, aug_apply_prob: float = 0.5, aug_dropout_prob: float = 0.05):
         self.texts = [build_text(row) for _, row in df.iterrows()]
         self.voxels = df["voxel_data"].tolist()
         self.categories = df["subtitle"].fillna("Unknown").tolist()
         self.block_mapping = block_mapping
         self.crop_bbox = crop_bbox
+        self.augment = augment
+        self.aug_apply_prob = aug_apply_prob
+        self.aug_dropout_prob = aug_dropout_prob
 
     def __len__(self):
         return len(self.texts)
@@ -121,6 +125,20 @@ class SchematicDataset(Dataset):
     def __getitem__(self, idx):
         text = self.texts[idx]
         voxel = remap_voxel(self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox)
+        
+        if self.augment:
+            import random
+            # 1. Random 90-degree rotations in the horizontal plane (assuming axes 0 and 2 are X and Z)
+            k = random.randint(0, 3)
+            if k > 0:
+                voxel = torch.rot90(voxel, k, [0, 2])
+                
+            # 2. Block dropout
+            if random.random() < self.aug_apply_prob:
+                non_air_mask = voxel != 0
+                drop_mask = torch.rand_like(voxel, dtype=torch.float) < self.aug_dropout_prob
+                voxel[non_air_mask & drop_mask] = 0
+
         category = self.categories[idx]
         return text, voxel, category
 
@@ -170,10 +188,14 @@ def create_dataloaders(
     print(f"Splits — train: {len(idx_train)}, val: {len(idx_val)}, test: {len(idx_test)}")
     
     crop_bbox = data_cfg.get("crop_bbox", True)
+    augment = data_cfg.get("augment", True)
+    aug_apply_prob = data_cfg.get("aug_apply_prob", 0.5)
+    aug_dropout_prob = data_cfg.get("aug_dropout_prob", 0.05)
 
-    ds_train = SchematicDataset(df.iloc[idx_train].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox)
-    ds_val   = SchematicDataset(df.iloc[idx_val].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox)
-    ds_test  = SchematicDataset(df.iloc[idx_test].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox)
+    ds_train = SchematicDataset(df.iloc[idx_train].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox, 
+                                augment=augment, aug_apply_prob=aug_apply_prob, aug_dropout_prob=aug_dropout_prob)
+    ds_val   = SchematicDataset(df.iloc[idx_val].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox, augment=False)
+    ds_test  = SchematicDataset(df.iloc[idx_test].reset_index(drop=True), block_mapping, crop_bbox=crop_bbox, augment=False)
 
     # --- loaders -------------------------------------------------------
     train_cfg = cfg["training"]

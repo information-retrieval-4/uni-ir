@@ -5,6 +5,9 @@ data:
   max_block_types: 256 # keep top-N most frequent block IDs, rest → <rare>
   text_max_length: 256 # max tokens for text encoder
   crop_bbox: true # crop to bounding box before resizing
+  augment: true # whether to apply training augmentations (rotations/dropout)
+  aug_apply_prob: 0.5 # probability to apply block dropout
+  aug_dropout_prob: 0.05 # fraction of non-air blocks to drop
   val_split: 0.1
   test_split: 0.1
   seed: 42
