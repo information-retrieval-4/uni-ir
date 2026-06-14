@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 # Pastikan src/ ada di PYTHONPATH jika dijalankan dari folder lain
@@ -79,7 +79,7 @@ def train_one_epoch(
 
         optimizer.zero_grad()
 
-        with autocast(enabled=use_amp):
+        with autocast('cuda', enabled=use_amp):
             text_emb, voxel_emb = model(texts, voxels)
             loss = criterion(text_emb, voxel_emb)
 
@@ -116,7 +116,7 @@ def validate(model, loader, criterion, device, use_amp: bool = True):
 
     for texts, voxels, _cats in tqdm(loader, desc="  val  ", leave=False):
         voxels = voxels.to(device)
-        with autocast(enabled=use_amp):
+        with autocast('cuda', enabled=use_amp):
             text_emb, voxel_emb = model(texts, voxels)
             loss = criterion(text_emb, voxel_emb)
         total_loss  += loss.item()
@@ -227,7 +227,7 @@ def train(cfg: dict, warmstart_path: str = None):
     scheduler = build_scheduler(optimizer, cfg)
 
     # ── AMP Scaler ─────────────────────────────────────────────────────────
-    scaler = GradScaler(enabled=use_amp)
+    scaler = GradScaler('cuda', enabled=use_amp)
 
     # ── Training loop ──────────────────────────────────────────────────────
     ckpt_dir        = tr_cfg["checkpoint_dir"]
