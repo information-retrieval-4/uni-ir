@@ -161,9 +161,9 @@ class TextEncoder(nn.Module):
         """
         with torch.no_grad():
             text_feats = self.encode_text(texts)  # (B, text_hidden_dim)
-        # Move to same device as projection head, detach from no_grad graph,
+        # Move to same device as projection head, clone/detach from no_grad graph,
         # and re-enable grad so gradients flow through self.project during training.
-        text_feats = text_feats.to(next(self.project.parameters()).device).detach().requires_grad_(True)
+        text_feats = text_feats.to(next(self.project.parameters()).device).clone().detach().requires_grad_(True)
         x = self.project(text_feats)               # (B, embed_dim)
         return x
 

@@ -1,0 +1,139 @@
+<mxfile host="65bd71144e">
+  <diagram id="PtBERT_Architecture" name="Point-BERT Semantic Architecture">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1350" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="g_text" value="TEXT ENCODER BRANCH" style="shape=rectangle;rounded=1;arcSize=6;fillColor=#F8FAFC;strokeColor=#94A3B8;strokeWidth=2;dashed=1;verticalAlign=top;align=center;fontStyle=1;fontFamily=Helvetica;fontSize=14;fontColor=#334155;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="50" width="270" height="310" as="geometry"/>
+        </mxCell>
+        <mxCell id="g_voxel" value="VOXEL ENCODER BRANCH (POINT-BERT)" style="shape=rectangle;rounded=1;arcSize=6;fillColor=#F8FAFC;strokeColor=#94A3B8;strokeWidth=2;dashed=1;verticalAlign=top;align=center;fontStyle=1;fontFamily=Helvetica;fontSize=14;fontColor=#334155;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="400" width="480" height="440" as="geometry"/>
+        </mxCell>
+        <mxCell id="in_parquet" value="&lt;b&gt;Minecraft Schematics&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot; color=&quot;#475569&quot;&gt;Parquet Dataset&lt;br/&gt;8,328 samples&lt;/font&gt;" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#F8FAFC;strokeColor=#475569;strokeWidth=2;fontColor=#1E293B;fontStyle=1;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="245" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="in_text" value="&lt;b&gt;Text Metadata&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot; color=&quot;#2563EB&quot;&gt;Title, Subtitle,&lt;br/&gt;Description, Tags&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;strokeWidth=1.5;fontColor=#1E3A8A;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="145" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="in_voxel" value="&lt;b&gt;Voxel Grid (32³)&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot; color=&quot;#059669&quot;&gt;Discrete voxel grid&lt;br/&gt;Block ID array&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="355" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="strat_3" value="💡 &lt;b&gt;Strategy 3: Material Context&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Extract top-K dominant block names&lt;br/&gt;and append to text prompt&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#A855F7;strokeWidth=2;fontColor=#5B21B6;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="50" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="strat_1" value="💡 &lt;b&gt;Strategy 1: Name Vocab&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Build block name mapping&lt;br/&gt;(254 unique non-air names → [0..255])&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#A855F7;strokeWidth=2;fontColor=#5B21B6;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="450" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="strat_2" value="💡 &lt;b&gt;Strategy 2: Semantic Init&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Pre-compute block name embeddings&lt;br/&gt;using SentenceTransformer&lt;br/&gt;• MD5 Hash Cache (caching to disk)&lt;br/&gt;• Project text_emb (384) → block_emb (64)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#A855F7;strokeWidth=2;fontColor=#5B21B6;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="780" y="250" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="te_st" value="&lt;b&gt;SentenceTransformer&lt;/b&gt;&lt;br/&gt;❄️ &lt;font size=&quot;11&quot; color=&quot;#475569&quot;&gt;all-MiniLM-L6-v2 (Frozen)&lt;br/&gt;Output: (B, 384)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;strokeWidth=1.5;fontColor=#1E3A8A;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="90" width="190" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="te_detach" value="&lt;b&gt;Gradient Detach&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;detach().requires_grad_(True)&lt;br/&gt;Allows projection gradient flow&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#EF4444;strokeWidth=1.5;fontColor=#991B1B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="160" width="190" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="te_mlp" value="&lt;b&gt;Projection MLP Head&lt;/b&gt;&lt;br/&gt;🔥 &lt;font size=&quot;11&quot;&gt;Linear(384→256)&lt;br/&gt;→ GELU → Dropout(0.3)&lt;br/&gt;→ Linear(256→256)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;strokeWidth=2.5;fontColor=#1E3A8A;fontFamily=Helvetica;align=center;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="540" y="225" width="190" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="te_norm" value="&lt;b&gt;L2 Normalization&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;text_emb (B, 256)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;strokeWidth=1.5;fontColor=#1E3A8A;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="305" width="190" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_v2p" value="&lt;b&gt;VoxelToPoints&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Extract coordinates (x,y,z)&lt;br/&gt;for non-air blocks (M ≤ 512)&lt;br/&gt;Output: (M, 3)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="530" y="440" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_emb" value="&lt;b&gt;Block Embedding Table&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Embedding table (256 × 64)&lt;br/&gt;• Init via Strategy 2&lt;br/&gt;• Trainable or Frozen&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="770" y="440" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_concat" value="&lt;b&gt;Concatenate Features&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;[xyz (3) || block_feat (64)]&lt;br/&gt;Output: (M, 67)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="640" y="525" width="200" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_inproj" value="&lt;b&gt;Input Projection&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;Linear (67 → 384)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="640" y="590" width="200" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_ptbert" value="&lt;b&gt;Point-BERT Backbone&lt;/b&gt;&lt;br/&gt;❄️ &lt;font size=&quot;11&quot; color=&quot;#475569&quot;&gt;Standard Point Transformer&lt;br/&gt;12 Encoder Layers (Frozen)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="640" y="650" width="200" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_mlp" value="&lt;b&gt;Output MLP Head&lt;/b&gt;&lt;br/&gt;🔥 &lt;font size=&quot;11&quot;&gt;Linear (384 → 256)&lt;br/&gt;Trainable weights&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=2.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="720" width="200" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="ve_norm" value="&lt;b&gt;L2 Normalization&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;voxel_emb (B, 256)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;strokeWidth=1.5;fontColor=#064E3B;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="640" y="785" width="200" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="loss_sim" value="&lt;b&gt;Cosine Similarity Matrix&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;S = (text_emb @ voxel_embᵀ) / τ&lt;br/&gt;Batch Size: B × B Matrix&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#F59E0B;strokeWidth=2;fontColor=#78350F;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="395" width="170" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="loss_infonce" value="&lt;b&gt;Symmetric InfoNCE Loss&lt;/b&gt;&lt;br/&gt;&lt;font size=&quot;11&quot;&gt;CLIP Contrastive Loss&lt;br/&gt;• CE (S, labels) (Text→Voxel)&lt;br/&gt;• CE (Sᵀ, labels) (Voxel→Text)&lt;br/&gt;• Learnable temperature τ&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#F59E0B;strokeWidth=2;fontColor=#78350F;fontFamily=Helvetica;align=center;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="490" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_pq_txt" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#64748B;fillColor=none;" edge="1" parent="1" source="in_parquet" target="in_text">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_pq_vx" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#64748B;fillColor=none;" edge="1" parent="1" source="in_parquet" target="in_voxel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_vx_s3" value="voxel block analysis" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#8B5CF6;dashed=1;fillColor=none;" edge="1" parent="1" source="in_voxel" target="strat_3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s3_txt" value="augment text" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#8B5CF6;dashed=1;fillColor=none;" edge="1" parent="1" source="strat_3" target="in_text">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_vx_s1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#64748B;fillColor=none;" edge="1" parent="1" source="in_voxel" target="strat_1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_txt_st" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="in_text" target="te_st">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_st_det" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="te_st" target="te_detach">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_det_mlp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="te_detach" target="te_mlp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_mlp_norm" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="te_mlp" target="te_norm">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s1_v2p" value="coordinates" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="strat_1" target="ve_v2p">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s1_emb" value="vocab indices" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="strat_1" target="ve_emb">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_v2p_cc" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_v2p" target="ve_concat">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_emb_cc" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_emb" target="ve_concat">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_cc_inproj" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_concat" target="ve_inproj">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_inproj_pb" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_inproj" target="ve_ptbert">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_pb_mlp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_ptbert" target="ve_mlp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_mlp_norm_v" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_mlp" target="ve_norm">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_st_s2" value="SentenceTransformer model reference" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#8B5CF6;dashed=1;fillColor=none;" edge="1" parent="1" source="te_st" target="strat_2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s2_emb" value="initialize weights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1.5;strokeColor=#8B5CF6;dashed=1;fillColor=none;" edge="1" parent="1" source="strat_2" target="ve_emb">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_norm_t_sim" value="text_emb" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="te_norm" target="loss_sim">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_norm_v_sim" value="voxel_emb" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="ve_norm" target="loss_sim">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_sim_info" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.5;strokeColor=#475569;fillColor=none;" edge="1" parent="1" source="loss_sim" target="loss_infonce">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
