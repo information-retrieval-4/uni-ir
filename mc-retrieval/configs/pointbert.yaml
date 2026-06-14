@@ -1,0 +1,93 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Point-BERT Config — Plan 2: Feature Extraction (Frozen Backbone ❄️)
+#
+# Backbone: ViT-style Transformer (timm.Block) — arsitektur SAMA dengan
+# Point-BERT official (CVPR 2022). Pretrained di ShapeNet55 3D point cloud.
+#
+# Download pretrained weights:
+#   https://github.com/lulutang0608/Point-BERT  (lihat README → Download)
+#   → Simpan di: checkpoints/Point-BERT.pth
+#
+# Mulai dari sini. Backbone Transformer dikunci; hanya Input Adapter dan
+# Output Head yang belajar. Hemat VRAM, cepat, risiko overfit rendah.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Inherit semua setting data/model teks dari baseline
+data:
+  parquet_path: "data/data.parquet"
+  max_block_types: 256
+  text_max_length: 256
+  crop_bbox: true
+  augment: true
+  aug_apply_prob: 0.5
+  aug_dropout_prob: 0.05
+  val_split: 0.1
+  test_split: 0.1
+  seed: 42
+
+model:
+  embed_dim: 256             # shared embedding space dim (sama dengan baseline)
+  # text encoder (tidak berubah dari baseline)
+  text_model: "all-MiniLM-L6-v2"
+  freeze_text_encoder: true
+  text_hidden_dim: 384
+  dropout: 0.1               # dropout untuk text projection head
+
+# ── Point-BERT specific settings ──────────────────────────────────────────────
+pointbert:
+
+  # ❄️ PLAN 2: Backbone dibekukan — hanya adapter + head yang dilatih
+  freeze_backbone: true
+
+  # Pretrained backbone (HuggingFace): 12 layers, 384-dim, 6 heads (~33M params)
+  # Warm-start dari BERT yang sudah pretrained → tidak mulai dari nol
+  backbone_name: "google/bert_uncased_L-12_H-384_A-6"
+
+  # ── Pretrained Weights ──────────────────────────────────────────────────
+  # Path ke file Point-BERT.pth (download dari GitHub repo resmi Point-BERT)
+  # Set null jika belum download (akan pakai random init)
+  pretrained_path: "checkpoints/Point-BERT.pth"
+
+  # ── Transformer Architecture (sesuai Point-BERT paper) ──────────────────
+  trans_dim : 384    # hidden dim (Point-BERT default)
+  depth     : 12     # jumlah layer
+  num_heads : 6      # jumlah attention head
+  mlp_ratio : 4.0    # FFN expansion ratio
+  drop_path : 0.1    # stochastic depth rate
+
+  # ── Input Adapter ────────────────────────────────────────────────────────
+  # Jumlah titik yang di-sample dari setiap voxel grid
+  # Bisa diubah: 256 (cepat) | 512 (default) | 1024 (representatif tapi berat)
+  num_points: 512
+
+  # Dimensi embedding per block ID
+  block_embed_dim: 64
+  dropout: 0.1
+
+  # Gunakan FPS saat evaluasi (deterministik, representatif)
+  use_fps_eval: true
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  batch_size: 128            # lebih kecil dari baseline (256) karena Point-BERT
+  epochs: 100
+  weight_decay: 1.0e-2
+
+  # Learning rates (Plan 2: backbone frozen, hanya adapter + head)
+  lr_adapter: 3.0e-4         # block_embedding + input_projection + cls_token
+  lr_head: 1.0e-4            # output_head
+  lr_text_proj: 1.0e-4       # text encoder projection head
+  lr_backbone: 0.0           # tidak dipakai (backbone frozen), tapi dicantumkan
+
+  temperature_init: 0.07
+  warmup_ratio: 0.05          # 5% epoch pertama → warmup LR
+  early_stopping_patience: 20
+  num_workers: 2
+  checkpoint_dir: "checkpoints/pointbert_plan2"
+
+  # Mixed Precision (AMP) — hemat VRAM ~40-50%, training lebih cepat
+  use_amp: true
+
+eval:
+  recall_k: [1, 5, 10]
+  batch_size: 128

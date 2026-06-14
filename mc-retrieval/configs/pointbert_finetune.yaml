@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Point-BERT Config — Plan 1: Full Fine-Tuning (Trainable Backbone 🔥)
+#
+# Jalankan SETELAH Plan 2 stabil. Seluruh Transformer ikut dilatih
+# menggunakan Discriminative Learning Rate:
+#   Adapter   → LR besar  (5e-4) — komponen baru, perlu belajar cepat
+#   Backbone  → LR mikro  (5e-6) — jaga bobot pretrained, hindari forgetting
+#   Head/Text → LR kecil  (1e-4) — moderate
+# ─────────────────────────────────────────────────────────────────────────────
+
+data:
+  parquet_path: "data/data.parquet"
+  max_block_types: 256
+  text_max_length: 256
+  crop_bbox: true
+  augment: true
+  aug_apply_prob: 0.5
+  aug_dropout_prob: 0.05
+  val_split: 0.1
+  test_split: 0.1
+  seed: 42
+
+model:
+  embed_dim: 256
+  text_model: "all-MiniLM-L6-v2"
+  freeze_text_encoder: true
+  text_hidden_dim: 384
+  dropout: 0.1
+
+# ── Point-BERT specific settings ──────────────────────────────────────────────
+pointbert:
+
+  # 🔥 PLAN 1: Backbone trainable — SEMUA dilatih (discriminative LR)
+  freeze_backbone: false
+
+  backbone_name: "google/bert_uncased_L-12_H-384_A-6"
+
+  # ── Input Adapter ────────────────────────────────────────────────────────
+  # Bisa tingkatkan ke 1024 jika VRAM cukup (A100 / T4)
+  num_points: 512
+
+  block_embed_dim: 64
+  dropout: 0.1
+  use_fps_eval: true
+
+  # Opsional: load checkpoint dari Plan 2 sebagai warm-start untuk Plan 1
+  # Uncomment dan isi path jika ingin curriculum: Plan2 → Plan1
+  # warmstart_checkpoint: "checkpoints/pointbert_plan2/best.pt"
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  batch_size: 64             # lebih kecil dari Plan 2 (backbone trainable → lebih berat)
+  epochs: 100
+  weight_decay: 1.0e-2
+
+  # Discriminative Learning Rates (kunci sukses fine-tuning)
+  lr_adapter: 5.0e-4         # block_embedding + input_projection + cls_token (baru, belajar cepat)
+  lr_head: 1.0e-4            # output_head (moderate)
+  lr_text_proj: 1.0e-4       # text projection (moderate)
+  lr_backbone: 5.0e-6        # backbone Transformer (SANGAT kecil — jaga pretrained weights)
+
+  temperature_init: 0.07
+  warmup_ratio: 0.1          # 10% warmup — lebih panjang karena backbone ikut belajar
+  early_stopping_patience: 25
+  num_workers: 2
+  checkpoint_dir: "checkpoints/pointbert_plan1"
+
+  # Mixed Precision — WAJIB aktif untuk Plan 1 (backbone trainable sangat boros VRAM)
+  use_amp: true
+
+eval:
+  recall_k: [1, 5, 10]
+  batch_size: 64
