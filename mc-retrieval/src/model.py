@@ -5,6 +5,22 @@ import torch.nn as nn
 from sentence_transformers import SentenceTransformer
 
 
+def apply_semantic_init(voxel_embedding_layer: nn.Embedding, text_encoder, block_names: list[str], block_embed_dim: int, device: torch.device):
+    """Initialize voxel embedding with PCA-reduced text embeddings of block names."""
+    print(f"Applying semantic block initialization to {len(block_names)} blocks...")
+    with torch.no_grad():
+        text_feats = text_encoder.encode_text(block_names)
+        text_feats = text_feats.to(device)
+        U, S, V = torch.pca_lowrank(text_feats, q=block_embed_dim)
+        reduced = torch.matmul(text_feats, V[:, :block_embed_dim])
+        
+        # Scale to match standard embedding init variance (~0.01)
+        reduced = reduced / (reduced.std(dim=0, keepdim=True) + 1e-8)
+        reduced = reduced * 0.1
+        
+        voxel_embedding_layer.weight.data.copy_(reduced)
+
+
 # ---------------------------------------------------------------------------
 # Depthwise Separable 3D Convolution
 # ---------------------------------------------------------------------------

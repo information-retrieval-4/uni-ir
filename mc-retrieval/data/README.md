@@ -12,6 +12,8 @@ This dataset contains 3D Minecraft structures (schematics) represented as flatte
 - **Number of Records:** 8,328
 - **Number of Features:** 19
 
+*(Note: There is an updated version of this dataset, `data_with_voxel_names.parquet` (22.0 MB) featuring `voxel_name_data`, available on Kaggle: [minecraft-schematics-mvm](https://www.kaggle.com/datasets/farhanwew/minecraft-schematics-mvm?select=data_with_voxel_names.parquet))*
+
 ## 🛠️ Schema & Features
 
 - **`url`**: `object`

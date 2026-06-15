@@ -99,11 +99,21 @@ def train(cfg: dict, pretrained_path: str = None):
     print(f"Device: {device}")
 
     # --- data ---
-    train_loader, val_loader, test_loader, block_mapping, num_blocks = \
+    train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = \
         create_dataloaders(cfg)
 
     # --- model ---
     model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
+    
+    if cfg["model"].get("semantic_init", False):
+        from model import apply_semantic_init
+        apply_semantic_init(
+            voxel_embedding_layer=model.voxel_encoder.block_embedding,
+            text_encoder=model.text_encoder,
+            block_names=block_names,
+            block_embed_dim=cfg["model"]["block_embed_dim"],
+            device=device
+        )
     criterion = CLIPLoss(
         temperature_init=cfg["training"]["temperature_init"]
     ).to(device)

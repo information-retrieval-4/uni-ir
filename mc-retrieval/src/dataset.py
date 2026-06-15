@@ -75,6 +75,42 @@ def build_block_mapping(voxel_series: pd.Series, max_types: int = 256):
     return mapping
 
 
+def extract_block_names(df: pd.DataFrame, block_mapping: dict) -> list[str]:
+    """Extract string names for each raw ID in the block_mapping."""
+    raw_id_to_name = {0: "air"}
+    
+    needed_ids = set(block_mapping.keys())
+    needed_ids.remove(0)
+    
+    if "voxel_name_data" not in df.columns:
+        return ["unknown block"] * len(block_mapping)
+        
+    for _, row in df.iterrows():
+        vd = np.asarray(row["voxel_data"]).flatten()
+        vnd = np.asarray(row["voxel_name_data"]).flatten()
+        
+        for i in range(len(vd)):
+            raw_id = vd[i]
+            if raw_id in needed_ids and raw_id not in raw_id_to_name:
+                raw_id_to_name[raw_id] = vnd[i]
+                
+            if len(raw_id_to_name) == len(block_mapping):
+                break
+        if len(raw_id_to_name) == len(block_mapping):
+            break
+            
+    compact_id_to_name = {compact_id: "unknown block" for compact_id in block_mapping.values()}
+    compact_id_to_name[1] = "unknown block" # <rare>
+    for raw_id, compact_id in block_mapping.items():
+        if raw_id in raw_id_to_name:
+            name = str(raw_id_to_name[raw_id]).replace("_", " ")
+            if not name.endswith("block") and name != "air":
+                name += " block"
+            compact_id_to_name[compact_id] = name
+            
+    return [compact_id_to_name[i] for i in range(len(compact_id_to_name))]
+
+
 def remap_voxel(voxel_flat, mapping: dict, crop_bbox: bool = True,
                 target_size: int = 32) -> torch.LongTensor:
     """Remap a flat voxel array, optionally crop to bbox and resize to target³."""
@@ -154,7 +190,7 @@ def create_dataloaders(
     """Load data, preprocess, split, and return train/val/test DataLoaders.
 
     Returns:
-        train_loader, val_loader, test_loader, block_mapping, num_block_types
+        train_loader, val_loader, test_loader, block_mapping, num_block_types, block_names
     """
     data_cfg = cfg["data"]
     path = parquet_path or data_cfg["parquet_path"]
@@ -168,6 +204,7 @@ def create_dataloaders(
         df["voxel_data"], max_types=data_cfg["max_block_types"]
     )
     num_block_types = data_cfg["max_block_types"]
+    block_names = extract_block_names(df, block_mapping)
     print(f"Block vocabulary: {num_block_types} types "
           f"(mapped from {len(set().union(*[set(np.asarray(v).tolist()) for v in df['voxel_data'].head(100)]))}+ unique raw IDs)")
 
@@ -231,4 +268,4 @@ def create_dataloaders(
         pin_memory=True,
     )
 
-    return train_loader, val_loader, test_loader, block_mapping, num_block_types
+    return train_loader, val_loader, test_loader, block_mapping, num_block_types, block_names

@@ -369,6 +369,30 @@ def pretrain(cfg: dict):
         ),
     ).to(device)
 
+    if model_cfg.get("semantic_init", False):
+        from dataset import extract_block_names
+        from model import TextEncoder, apply_semantic_init
+        block_names = extract_block_names(df, block_mapping)
+        # mask token gets an arbitrary string "mask token"
+        block_names.append("mask token")
+        
+        temp_text_encoder = TextEncoder(
+            model_name=model_cfg["text_model"],
+            text_hidden_dim=model_cfg["text_hidden_dim"],
+            embed_dim=model_cfg["embed_dim"],
+            freeze=True
+        ).to(device)
+        
+        apply_semantic_init(
+            voxel_embedding_layer=model.block_embedding,
+            text_encoder=temp_text_encoder,
+            block_names=block_names,
+            block_embed_dim=model_cfg["block_embed_dim"],
+            device=device
+        )
+        del temp_text_encoder
+        torch.cuda.empty_cache()
+
     param_count = sum(p.numel() for p in model.parameters())
     print(f"MVM model parameters: {param_count:,}")
 

@@ -200,7 +200,7 @@ def main():
     set_seed(cfg["data"]["seed"])
     device = get_device()
 
-    _, _, test_loader, block_mapping, num_blocks = create_dataloaders(cfg)
+    _, _, test_loader, block_mapping, num_blocks, _ = create_dataloaders(cfg)
     ckpt = load_checkpoint(args.checkpoint, device)
     model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
     model.load_state_dict(ckpt["model_state"])
