@@ -34,8 +34,8 @@ def build_gallery(model, loader, device, dataset):
 
     titles = [txt[:120] if txt else "" for txt in dataset.texts]
     subtitles = dataset.categories
-    descriptions = []  # not stored in dataset, skip
-    imgs = []          # not stored in dataset, skip
+    descriptions = [""] * len(titles)   # not stored in dataset
+    imgs = [""] * len(titles)           # not stored in dataset
 
     return voxel_embs, titles, subtitles, descriptions, imgs
 
@@ -75,7 +75,7 @@ def display_results(query, results):
         print(f"  #{r['rank']}  sim={r['score']:.4f}")
         print(f"       {title}")
         print(f"       {sub}")
-        if r["description"]:
+        if r.get("description"):
             desc = textwrap.shorten(r["description"], width=100, placeholder="...")
             print(f"       {desc}")
         print()
