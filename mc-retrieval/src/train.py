@@ -20,6 +20,7 @@ from utils import load_config, set_seed, get_device, save_checkpoint
 # Voxel augmentation
 # ---------------------------------------------------------------------------
 
+
 def augment_voxels(voxels: torch.LongTensor) -> torch.LongTensor:
     """Apply random 90° Y-axis rotation and horizontal flip to voxel grids.
 
@@ -49,7 +50,10 @@ def augment_voxels(voxels: torch.LongTensor) -> torch.LongTensor:
 # Training
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(model, loader, criterion, optimizer, scheduler, device, augment=True):
+
+def train_one_epoch(
+    model, loader, criterion, optimizer, scheduler, device, augment=True
+):
     model.train()
     total_loss = 0.0
     num_batches = 0
@@ -71,7 +75,9 @@ def train_one_epoch(model, loader, criterion, optimizer, scheduler, device, augm
 
         total_loss += loss.item()
         num_batches += 1
-        pbar.set_postfix(loss=f"{loss.item():.4f}", τ=f"{criterion.temperature.item():.4f}")
+        pbar.set_postfix(
+            loss=f"{loss.item():.4f}", τ=f"{criterion.temperature.item():.4f}"
+        )
 
     return total_loss / max(num_batches, 1)
 
@@ -99,12 +105,13 @@ def train(cfg: dict, pretrained_path: str = None):
     print(f"Device: {device}")
 
     # --- data ---
-    train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = \
+    train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = (
         create_dataloaders(cfg)
+    )
 
     # --- model ---
     model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
-    
+
     # --- load pretrained voxel encoder weights ---
     if pretrained_path and os.path.exists(pretrained_path):
         print(f"Loading pretrained voxel encoder from {pretrained_path}")
@@ -114,23 +121,26 @@ def train(cfg: dict, pretrained_path: str = None):
         missing, unexpected = model.voxel_encoder.load_state_dict(
             encoder_state, strict=False
         )
-        print(f"  Loaded pretrained weights — missing: {len(missing)}, unexpected: {len(unexpected)}")
+        print(
+            f"  Loaded pretrained weights — missing: {len(missing)}, unexpected: {len(unexpected)}"
+        )
         if missing:
             print(f"  Missing keys (will train from scratch): {missing}")
-
-    if cfg["model"].get("semantic_init", False):
+    elif cfg["model"].get("semantic_init", False):
+        # Only apply zero-shot semantic init if we are not loading a pretrained model.
         from model import apply_semantic_init
+
         apply_semantic_init(
             voxel_embedding_layer=model.voxel_encoder.block_embedding,
             text_encoder=model.text_encoder,
             block_names=block_names,
             block_embed_dim=cfg["model"]["block_embed_dim"],
-            device=device
+            device=device,
         )
-        
-    criterion = CLIPLoss(
-        temperature_init=cfg["training"]["temperature_init"]
-    ).to(device)
+
+    criterion = CLIPLoss(temperature_init=cfg["training"]["temperature_init"]).to(
+        device
+    )
 
     # count params
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -141,7 +151,10 @@ def train(cfg: dict, pretrained_path: str = None):
     train_cfg = cfg["training"]
     param_groups = [
         {"params": model.voxel_encoder.parameters(), "lr": train_cfg["lr_voxel"]},
-        {"params": model.text_encoder.project.parameters(), "lr": train_cfg["lr_text_proj"]},
+        {
+            "params": model.text_encoder.project.parameters(),
+            "lr": train_cfg["lr_text_proj"],
+        },
         {"params": criterion.parameters(), "lr": train_cfg["lr_voxel"]},
     ]
     optimizer = AdamW(param_groups, weight_decay=train_cfg["weight_decay"])
@@ -173,7 +186,7 @@ def train(cfg: dict, pretrained_path: str = None):
         val_loss = validate(model, val_loader, criterion, device)
 
         elapsed = time.time() - t0
-        lr_current = optimizer.param_groups[0]['lr']
+        lr_current = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
             f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
@@ -203,7 +216,9 @@ def train(cfg: dict, pretrained_path: str = None):
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                print(
+                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
+                )
                 break
 
     # save final
@@ -231,8 +246,12 @@ def train(cfg: dict, pretrained_path: str = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train multimodal MC retrieval model")
     parser.add_argument("--config", type=str, default="configs/default.yaml")
-    parser.add_argument("--pretrained", type=str, default=None,
-                        help="Path to pretrained voxel encoder checkpoint (from pretrain.py)")
+    parser.add_argument(
+        "--pretrained",
+        type=str,
+        default=None,
+        help="Path to pretrained voxel encoder checkpoint (from pretrain.py)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
