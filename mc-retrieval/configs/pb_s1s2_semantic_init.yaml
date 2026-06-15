@@ -9,7 +9,7 @@
 
 data:
   parquet_path: "data/data_with_voxel_names_multiview_image.parquet"
-  max_block_types: 256
+  max_block_types: 672
   text_max_length: 256
   crop_bbox: true
   augment: true
@@ -60,7 +60,7 @@ training:
   warmup_ratio: 0.05
   early_stopping_patience: 20
   num_workers: 2
-  checkpoint_dir: "checkpoints/pb_s1s2_semantic_init"
+  checkpoint_dir: "checkpoints/pb_s1s2_semantic_init_512"
   use_amp: true
 
 eval:
