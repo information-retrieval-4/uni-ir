@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
 from tqdm import tqdm
 
 # Pastikan src/ ada di PYTHONPATH jika dijalankan dari folder lain
@@ -66,7 +66,7 @@ def print_param_groups(groups: list):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def train_one_epoch(
-    model, loader, criterion, optimizer, scaler, device,
+    model, loader, criterion, optimizer, device,
     use_amp: bool = True,
 ):
     model.train()
@@ -83,18 +83,10 @@ def train_one_epoch(
             text_emb, voxel_emb = model(texts, voxels)
             loss = criterion(text_emb, voxel_emb)
 
-        if use_amp:
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            all_params = list(model.parameters()) + list(criterion.parameters())
-            nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-            optimizer.step()
-            scaler.update()
-        else:
-            loss.backward()
-            all_params = list(model.parameters()) + list(criterion.parameters())
-            nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-            optimizer.step()
+        loss.backward()
+        all_params = list(model.parameters()) + list(criterion.parameters())
+        nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+        optimizer.step()
 
         total_loss  += loss.item()
         num_batches += 1
@@ -228,9 +220,6 @@ def train(cfg: dict, warmstart_path: str = None):
     # ── Scheduler ──────────────────────────────────────────────────────────
     scheduler = build_scheduler(optimizer, cfg)
 
-    # ── AMP Scaler ─────────────────────────────────────────────────────────
-    scaler = GradScaler('cuda', enabled=use_amp)
-
     # ── Training loop ──────────────────────────────────────────────────────
     ckpt_dir        = tr_cfg["checkpoint_dir"]
     patience        = tr_cfg["early_stopping_patience"]
@@ -245,7 +234,7 @@ def train(cfg: dict, warmstart_path: str = None):
         t0 = time.time()
 
         train_loss = train_one_epoch(
-            model, train_loader, criterion, optimizer, scaler, device, use_amp
+            model, train_loader, criterion, optimizer, device, use_amp
         )
         val_loss = validate(model, val_loader, criterion, device, use_amp)
 
