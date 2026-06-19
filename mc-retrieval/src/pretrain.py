@@ -19,7 +19,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from dataset import build_block_mapping, remap_voxel
+from dataset import augment_voxel, build_block_mapping, remap_voxel
 from utils import load_config, set_seed, get_device, save_checkpoint
 from model import DepthwiseSeparableConv3d
 
@@ -56,20 +56,7 @@ class VoxelOnlyDataset(Dataset):
             self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox
         )
         if self.augment:
-            import random
-
-            # 1. Random 90-degree rotations in the horizontal plane (assuming axes 0 and 2 are X and Z)
-            k = random.randint(0, 3)
-            if k > 0:
-                voxel = torch.rot90(voxel, k, [0, 2])
-
-            # 2. Block dropout
-            if random.random() < self.aug_apply_prob:
-                non_air_mask = voxel != 0
-                drop_mask = (
-                    torch.rand_like(voxel, dtype=torch.float) < self.aug_dropout_prob
-                )
-                voxel[non_air_mask & drop_mask] = 0
+            voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
         return voxel
 
 

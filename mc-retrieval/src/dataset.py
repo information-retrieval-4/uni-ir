@@ -228,6 +228,33 @@ def build_text_with_materials(
 
 
 # ---------------------------------------------------------------------------
+# Augmentation
+# ---------------------------------------------------------------------------
+
+def augment_voxel(
+    voxel: torch.LongTensor,
+    aug_apply_prob: float = 0.5,
+    aug_dropout_prob: float = 0.05,
+) -> torch.LongTensor:
+    """Random 90° horizontal rotation + block dropout for a single voxel grid.
+
+    Args:
+        voxel:            (32, 32, 32) block-ID tensor
+        aug_apply_prob:   probability to apply block dropout
+        aug_dropout_prob: fraction of non-air blocks to zero out
+    """
+    import random
+    k = random.randint(0, 3)
+    if k > 0:
+        voxel = torch.rot90(voxel, k, [0, 2])
+    if random.random() < aug_apply_prob:
+        non_air_mask = voxel != 0
+        drop_mask = torch.rand_like(voxel, dtype=torch.float) < aug_dropout_prob
+        voxel[non_air_mask & drop_mask] = 0
+    return voxel
+
+
+# ---------------------------------------------------------------------------
 # PyTorch Dataset
 # ---------------------------------------------------------------------------
 
@@ -287,18 +314,8 @@ class SchematicDataset(Dataset):
         voxel = self._remap_fn(
             self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox
         )
-
         if self.augment:
-            import random
-            k = random.randint(0, 3)
-            if k > 0:
-                voxel = torch.rot90(voxel, k, [0, 2])
-
-            if random.random() < self.aug_apply_prob:
-                non_air_mask = voxel != 0
-                drop_mask = torch.rand_like(voxel, dtype=torch.float) < self.aug_dropout_prob
-                voxel[non_air_mask & drop_mask] = 0
-
+            voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
         return text, voxel, self.categories[idx]
 
 
