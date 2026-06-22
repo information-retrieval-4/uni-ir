@@ -50,7 +50,7 @@ pointbert:
   use_fps_eval: true
 
 training:
-  batch_size: 128
+  batch_size: 64
   epochs: 100
   weight_decay: 1.0e-2
   lr_adapter: 3.0e-4
