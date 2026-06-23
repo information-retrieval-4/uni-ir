@@ -39,7 +39,12 @@ model:
 
 pointbert:
   freeze_backbone: true
+  pretrained_type: "vanilla"  # "vanilla" | "ulip"
   pretrained_path: "checkpoints/Point-BERT.pth"
+  # ULIP-2 alternatives (download from https://huggingface.co/datasets/SFXX/ulip):
+  # pretrained_type: "ulip"
+  # pretrained_path: "checkpoints/ULIP-2-PointBERT-10k-xyzrgb-pc-vit_g-objaverse_shapenet-pretrained.pt"
+  # pretrained_path: "checkpoints/ULIP-2-PointBERT-8k-xyz-pc-slip_vit_b-objaverse-pretrained.pt"
   trans_dim: 384
   depth: 12
   num_heads: 6
