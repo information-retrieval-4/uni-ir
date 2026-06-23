@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ULIP-2 PointNeXt — 2K points, ViT-G, Objaverse+ShapeNet
+#
+# Backbone: ULIP-2 pre-trained PointNeXt (arsitektur BERBEDA dari PointBERT)
+# Checkpoint: ULIP-2-PointNeXt-objavserse_shapenet-2KPTS-vit_g-pretrained.pt
+#
+# CATATAN: PointNeXt butuh encoder_type="pointnext" — belum diimplementasi.
+#   File ini untuk referensi/future work.
+# ─────────────────────────────────────────────────────────────────────────────
+
+data:
+  parquet_path: "data/data_merged_with_text.parquet"
+  text_mode: "cleaned_aug"  # "default" | "cleaned" | "cleaned_aug"
+  max_block_types: 672
+  text_max_length: 256
+  crop_bbox: true
+  augment: true
+  aug_apply_prob: 0.5
+  aug_dropout_prob: 0.05
+  val_split: 0.1
+  test_split: 0.1
+  seed: 42
+
+  use_name_vocab: true
+  use_material_context: false
+  top_k_materials: 5
+
+model:
+  encoder_type: "pointnext"  # TODO: implement PointNeXt encoder
+  embed_dim: 256
+  text_model: "all-MiniLM-L6-v2"
+  freeze_text_encoder: true
+  text_hidden_dim: 384
+  dropout: 0.1
+
+  use_semantic_init: false   # PointNeXt tidak pakai block_embedding vocab
+  semantic_init_freeze: false
+
+pointnext:
+  freeze_backbone: true
+  pretrained_type: "ulip"
+  pretrained_path: "checkpoints/ULIP-2-PointNeXt-objavserse_shapenet-2KPTS-vit_g-pretrained.pt"
+  num_points: 2048
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  epochs: 100
+  weight_decay: 1.0e-2
+  lr_adapter: 3.0e-4
+  lr_head: 1.0e-4
+  lr_text_proj: 1.0e-4
+  lr_backbone: 0.0
+  temperature_init: 0.07
+  warmup_ratio: 0.05
+  early_stopping_patience: 20
+  num_workers: 2
+  checkpoint_dir: "checkpoints/ulip2_pointnext"
+  use_amp: true
+
+eval:
+  recall_k: [1, 5, 10]
+  batch_size: 128
