@@ -154,7 +154,20 @@ def build_scheduler(optimizer, cfg: dict):
         return scheduler
 
 
-def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
+def load_resume_checkpoint(path, model, optimizer, scheduler, criterion, device):
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state"])
+    optimizer.load_state_dict(ckpt["optimizer_state"])
+    criterion.load_state_dict(ckpt["criterion_state"])
+    start_epoch = ckpt["epoch"] + 1
+    for _ in range(ckpt["epoch"]):
+        scheduler.step()
+    best_val_loss = ckpt.get("val_loss", float("inf"))
+    print(f"[Resume] Melanjutkan dari epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
+    return start_epoch, best_val_loss
+
+
+def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, resume_path: str = None):
     """Full training run."""
     set_seed(cfg["data"]["seed"])
     device = get_device()
@@ -241,13 +254,20 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
     patience = train_cfg["early_stopping_patience"]
     best_val_loss = float("inf")
     epochs_no_improve = 0
-    total_steps = len(train_loader) * train_cfg["epochs"]
+    start_epoch = 1
 
+    if resume_path and os.path.exists(resume_path):
+        start_epoch, best_val_loss = load_resume_checkpoint(
+            resume_path, model, optimizer, scheduler, criterion, device
+        )
+
+    total_steps = len(train_loader) * (train_cfg["epochs"] - start_epoch + 1)
     print(f"\nStarting training for {train_cfg['epochs']} epochs...")
     print(f"  Batch size: {train_cfg['batch_size']}")
-    print(f"  Total steps: {total_steps}\n")
+    print(f"  Start epoch: {start_epoch}")
+    print(f"  Remaining steps: {total_steps}\n")
 
-    for epoch in range(1, train_cfg["epochs"] + 1):
+    for epoch in range(start_epoch, train_cfg["epochs"] + 1):
         t0 = time.time()
 
         train_loss = train_one_epoch(
@@ -268,32 +288,7 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
         scheduler.step()
 
         # checkpointing
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            epochs_no_improve = 0
-            save_checkpoint(
-                {
-                    "epoch": epoch,
-                    "model_state": model.state_dict(),
-                    "criterion_state": criterion.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "val_loss": val_loss,
-                    "block_mapping": block_mapping,
-                    "cfg": cfg,
-                },
-                os.path.join(ckpt_dir, "best.pt"),
-            )
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(
-                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
-                )
-                break
-
-    # save final
-    save_checkpoint(
-        {
+        ckpt_payload = {
             "epoch": epoch,
             "model_state": model.state_dict(),
             "criterion_state": criterion.state_dict(),
@@ -301,9 +296,21 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
             "val_loss": val_loss,
             "block_mapping": block_mapping,
             "cfg": cfg,
-        },
-        os.path.join(ckpt_dir, "last.pt"),
-    )
+        }
+        # always save last.pt every epoch for resume support
+        save_checkpoint(ckpt_payload, os.path.join(ckpt_dir, "last.pt"))
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_no_improve = 0
+            save_checkpoint(ckpt_payload, os.path.join(ckpt_dir, "best.pt"))
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(
+                    f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)"
+                )
+                break
 
     print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
     return model, criterion, test_loader, block_mapping
@@ -328,6 +335,12 @@ if __name__ == "__main__":
         default=None,
         help="Optional: path to warm-start checkpoint (e.g. for PointBERT Plan 1)",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume training from last.pt (restores epoch, optimizer, scheduler, best_val_loss)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -341,4 +354,4 @@ if __name__ == "__main__":
         print(f"  {plan_label}")
         print(f"{'='*60}")
         
-    train(cfg, pretrained_path=args.pretrained, warmstart_path=args.warmstart)
+    train(cfg, pretrained_path=args.pretrained, warmstart_path=args.warmstart, resume_path=args.resume)

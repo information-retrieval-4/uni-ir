@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from dataset import create_dataloaders
 from model import DualEncoder
-from model_pointbert import DualEncoderPointBERT
 from utils import load_config, set_seed, get_device, load_checkpoint
 
 
@@ -150,11 +149,7 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
     # rebuild data loaders
     _, _, test_loader, block_mapping, num_blocks, _ = create_dataloaders(cfg)
 
-    # rebuild model — use PointBERT if config has pointbert section
-    if "pointbert" in cfg:
-        model = DualEncoderPointBERT(cfg, num_block_types=num_blocks).to(device)
-    else:
-        model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
+    model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
     model.load_state_dict(ckpt["model_state"])
 
     # extract embeddings
