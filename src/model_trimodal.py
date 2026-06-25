@@ -123,12 +123,16 @@ class CLIPImageEncoder(nn.Module):
         self.proj = nn.Linear(clip_out_dim, cfg["model"]["embed_dim"])
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        # pixel_values: (B, N_views, 3, H, W)
-        B, N, C, H, W = pixel_values.shape
-        pv = pixel_values.view(B * N, C, H, W)
-        out = self.vision_model(pixel_values=pv)
-        feats = self.visual_proj(out.pooler_output)     # (B*N, clip_out_dim)
-        feats = feats.view(B, N, -1).mean(dim=1)        # mean-pool → (B, clip_out_dim)
+        if pixel_values.ndim == 3:
+            # cached path: (B, N_views, clip_out_dim) — skip frozen backbone
+            feats = pixel_values.mean(dim=1)            # (B, clip_out_dim)
+        else:
+            # raw path: (B, N_views, 3, H, W)
+            B, N, C, H, W = pixel_values.shape
+            pv = pixel_values.view(B * N, C, H, W)
+            out = self.vision_model(pixel_values=pv)
+            feats = self.visual_proj(out.pooler_output) # (B*N, clip_out_dim)
+            feats = feats.view(B, N, -1).mean(dim=1)    # (B, clip_out_dim)
         return F.normalize(self.proj(feats), dim=-1)
 
     def backbone_params(self):
