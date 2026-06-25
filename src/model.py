@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from timm.layers import DropPath, trunc_normal_
-import src.open_clip as open_clip
+import open_clip
 
 
 def apply_semantic_init(

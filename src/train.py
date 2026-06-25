@@ -13,8 +13,8 @@ from torch.amp import autocast
 from tqdm import tqdm
 
 from dataset import create_dataloaders
-from model import DualEncoder
-from losses import CLIPLoss
+from model import DualEncoder, TrimodalEncoder
+from losses import CLIPLoss, NTXentLoss
 from utils import load_config, set_seed, get_device, save_checkpoint
 
 
@@ -76,7 +76,14 @@ def train_one_epoch(
     num_batches = 0
 
     pbar = tqdm(loader, desc="  train", leave=False)
-    for texts, voxels, _categories in pbar:
+    for batch in pbar:
+        if len(batch) == 4:
+            texts, voxels, images, _categories = batch
+            images = images.to(device)
+        else:
+            texts, voxels, _categories = batch
+            images = None
+
         voxels = voxels.to(device)
 
         if augment:
@@ -85,8 +92,12 @@ def train_one_epoch(
         optimizer.zero_grad()
 
         with autocast('cuda', enabled=use_amp):
-            text_emb, voxel_emb = model(texts, voxels)
-            loss = criterion(text_emb, voxel_emb)
+            if images is not None:
+                text_emb, voxel_emb, image_emb = model(texts, voxels, images)
+                loss = (criterion(text_emb, voxel_emb) + criterion(image_emb, voxel_emb) + criterion(text_emb, image_emb)) / 3.0
+            else:
+                text_emb, voxel_emb = model(texts, voxels)
+                loss = criterion(text_emb, voxel_emb)
 
         loss.backward()
         all_params = list(model.parameters()) + list(criterion.parameters())
@@ -95,9 +106,13 @@ def train_one_epoch(
 
         total_loss += loss.item()
         num_batches += 1
-        pbar.set_postfix(
-            loss=f"{loss.item():.4f}", τ=f"{criterion.temperature.item():.4f}"
-        )
+        
+        # log temp if using CLIPLoss, otherwise just loss
+        if hasattr(criterion, 'temperature'):
+            temp = criterion.temperature.item() if isinstance(criterion.temperature, torch.Tensor) else criterion.temperature
+            pbar.set_postfix(loss=f"{loss.item():.4f}", τ=f"{temp:.4f}")
+        else:
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     return total_loss / max(num_batches, 1)
 
@@ -108,11 +123,24 @@ def validate(model, loader, criterion, device, use_amp=False):
     total_loss = 0.0
     num_batches = 0
 
-    for texts, voxels, _categories in tqdm(loader, desc="  val  ", leave=False):
+    for batch in tqdm(loader, desc="  val  ", leave=False):
+        if len(batch) == 4:
+            texts, voxels, images, _categories = batch
+            images = images.to(device)
+        else:
+            texts, voxels, _categories = batch
+            images = None
+            
         voxels = voxels.to(device)
+        
         with autocast('cuda', enabled=use_amp):
-            text_emb, voxel_emb = model(texts, voxels)
-            loss = criterion(text_emb, voxel_emb)
+            if images is not None:
+                text_emb, voxel_emb, image_emb = model(texts, voxels, images)
+                loss = (criterion(text_emb, voxel_emb) + criterion(image_emb, voxel_emb) + criterion(text_emb, image_emb)) / 3.0
+            else:
+                text_emb, voxel_emb = model(texts, voxels)
+                loss = criterion(text_emb, voxel_emb)
+                
         total_loss += loss.item()
         num_batches += 1
 
@@ -162,13 +190,21 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
     print(f"Device: {device}")
     print(f"AMP   : {'enabled' if use_amp else 'disabled'}")
 
+    # --- model initialization ---
+    use_trimodal = cfg.get("model", {}).get("use_trimodal", False)
+    num_blocks = cfg["data"]["max_block_types"]
+    
+    if use_trimodal:
+        model = TrimodalEncoder(cfg, num_block_types=num_blocks).to(device)
+        image_preprocess = getattr(model, "preprocess", None)
+    else:
+        model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
+        image_preprocess = None
+
     # --- data ---
     train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = (
-        create_dataloaders(cfg)
+        create_dataloaders(cfg, image_preprocess=image_preprocess)
     )
-
-    # --- model ---
-    model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
 
     # --- load pretrained voxel encoder weights (for CNN typically) ---
     if pretrained_path and os.path.exists(pretrained_path):
@@ -216,7 +252,10 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
                 device=device,
             )
 
-    criterion = CLIPLoss(temperature_init=cfg["training"]["temperature_init"]).to(device)
+    if use_trimodal:
+        criterion = NTXentLoss(temperature=cfg["training"].get("temperature_init", 0.07)).to(device)
+    else:
+        criterion = CLIPLoss(temperature_init=cfg["training"].get("temperature_init", 0.07)).to(device)
 
     # count params
     trainable, frozen = count_params(model)
@@ -257,13 +296,23 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None):
 
         elapsed = time.time() - t0
         lr_current = optimizer.param_groups[0]["lr"]
-        print(
-            f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
-            f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
-            f"τ={criterion.temperature.item():.4f}  "
-            f"lr={lr_current:.2e}  "
-            f"time={elapsed:.1f}s"
-        )
+        
+        if hasattr(criterion, 'temperature'):
+            temp = criterion.temperature.item() if isinstance(criterion.temperature, torch.Tensor) else criterion.temperature
+            print(
+                f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
+                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+                f"τ={temp:.4f}  "
+                f"lr={lr_current:.2e}  "
+                f"time={elapsed:.1f}s"
+            )
+        else:
+            print(
+                f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
+                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+                f"lr={lr_current:.2e}  "
+                f"time={elapsed:.1f}s"
+            )
 
         scheduler.step()
 

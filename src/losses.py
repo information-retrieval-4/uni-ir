@@ -80,3 +80,76 @@ class SimCLRLoss(nn.Module):
         
         loss = F.cross_entropy(sim, labels)
         return loss
+
+class NTXentLoss(nn.Module):
+    """
+    This NTXentLoss implementation is adapted from TriCoLo:
+    https://github.com/edreisMD/ConVIRT-pytorch/blob/master/loss/nt_xent.py
+    """
+    def __init__(self, temperature=0.07, alpha_weight=0.5):
+        super().__init__()
+        self.temperature = temperature
+        self.alpha_weight = alpha_weight
+
+    def _softXEnt(self, target, logits):
+        logprobs = F.log_softmax(logits, dim=1)
+        loss = -(target * logprobs).sum() / logits.shape[0]
+        return loss
+
+    def forward(self, zis, zjs, norm=True):
+        if norm:
+            zis = F.normalize(zis, p=2, dim=1)
+            zjs = F.normalize(zjs, p=2, dim=1)
+
+        batch_size = zis.shape[0]
+        labels = torch.eye(batch_size, device=zis.device, dtype=torch.float32)
+
+        logits_ab = torch.matmul(zis, torch.transpose(zjs, 0, 1)) / self.temperature
+        logits_ba = torch.matmul(zjs, torch.transpose(zis, 0, 1)) / self.temperature
+
+        loss_a = self._softXEnt(labels, logits_ab)
+        loss_b = self._softXEnt(labels, logits_ba)
+
+        return self.alpha_weight * loss_a + (1 - self.alpha_weight) * loss_b
+
+class TripletLoss(nn.Module):
+    def __init__(self, margin=0.2):
+        super(TripletLoss, self).__init__()
+        self.margin = margin
+
+    def _pairwise_distances(self, zis, zls, squared=False):
+        dot_product = torch.matmul(zls, zis.t())
+        a_square_norm = torch.diag(torch.matmul(zls, zls.t()))
+        b_square_norm = torch.diag(torch.matmul(zis, zis.t()))
+        distances = a_square_norm.unsqueeze(0) - 2.0 * dot_product + b_square_norm.unsqueeze(1)
+        distances[distances < 0] = 0
+        if not squared:
+            mask = distances.eq(0).float()
+            distances = distances + mask * 1e-16
+            distances = (1.0 - mask) * torch.sqrt(distances)
+        return distances
+
+    def forward(self, zis, zls):
+        batch_size = zis.shape[0]
+        distances = self._pairwise_distances(zis, zls)
+        loss_list = []
+        for i in range(batch_size):
+            for j in range(batch_size):
+                if i == j:
+                    continue
+                if distances[i][i] < distances[i][j] < distances[i][i] + self.margin:  # semi-hard
+                    loss_list.append(distances[i][i] - distances[i][j] + self.margin)
+
+        if len(loss_list) == 0:  # margin is set to a too small value
+            for i in range(batch_size):
+                for j in range(batch_size):
+                    if i == j:
+                        continue
+                    if distances[i][j] < distances[i][i]:  # hard
+                        loss_list.append(distances[i][i] - distances[i][j] + self.margin)
+
+        if len(loss_list) == 0:
+            return torch.tensor(0.0, device=zis.device)
+
+        loss = sum(loss_list) / len(loss_list)
+        return loss

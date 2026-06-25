@@ -16,6 +16,7 @@ data:
 
 model:
   encoder_type: "cnn"        # Or "pointbert" to use the Point-BERT voxel branch
+  use_trimodal: true         # Enable trimodal forward pass, losses, and dataset image loading
   embed_dim: 256             # Shared embedding space dim
   
   # Voxel CNN branch params
