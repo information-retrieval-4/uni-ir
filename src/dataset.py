@@ -375,7 +375,7 @@ class SchematicDataset(Dataset):
         top_k_materials: int = 5,
         text_column: str = None,
         image_preprocess = None,
-        image_column: str = None,
+        num_views: int = 1,
     ):
         # Build text — priority: text_column > material_context > default
         if text_column and text_column in df.columns:
@@ -404,10 +404,14 @@ class SchematicDataset(Dataset):
         self.aug_dropout_prob = aug_dropout_prob
         
         self.image_preprocess = image_preprocess
-        if image_column and image_column in df.columns:
-            self.image_paths = df[image_column].tolist()
-        else:
-            self.image_paths = None
+        self.num_views = num_views
+        self.image_paths_list = []
+        
+        for i in range(12):
+            col = f"view_{i:02d}_path"
+            if col in df.columns:
+                self.image_paths_list.append(df[col].tolist())
+                
         self.image_root = None
 
     def __len__(self):
@@ -421,33 +425,48 @@ class SchematicDataset(Dataset):
         if self.augment:
             voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
             
-        if self.image_paths is not None and self.image_preprocess is not None:
-            view_path = str(self.image_paths[idx])
+        if self.image_paths_list and self.image_preprocess is not None:
             import os
             import glob
             from PIL import Image
             
-            if self.image_root is None:
-                parts = view_path.split("/")
-                pattern = f"**/*{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else f"**/{view_path}"
-                matches = glob.glob(pattern, recursive=True)
-                if matches:
-                    matched_path = matches[0].replace('\\', '/')
-                    self.image_root = matched_path[:matched_path.rfind(view_path)]
-                else:
-                    self.image_root = ""
-                    
-            if self.image_root:
-                full_path = os.path.join(self.image_root, view_path)
+            total_available = len(self.image_paths_list)
+            if self.num_views == 1:
+                indices = [0]
             else:
-                full_path = view_path
+                indices = np.round(np.linspace(0, total_available - 1, self.num_views)).astype(int)
                 
-            try:
-                img = Image.open(full_path).convert('RGB')
-                image = self.image_preprocess(img)
-            except Exception:
-                image = torch.zeros(3, 224, 224)
-            return text, voxel, image, self.categories[idx]
+            images_out = []
+            for view_idx in indices:
+                view_path = str(self.image_paths_list[view_idx][idx])
+                
+                if self.image_root is None:
+                    parts = view_path.split("/")
+                    pattern = f"**/*{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else f"**/{view_path}"
+                    matches = glob.glob(pattern, recursive=True)
+                    if matches:
+                        matched_path = matches[0].replace('\\', '/')
+                        self.image_root = matched_path[:matched_path.rfind(view_path)]
+                    else:
+                        self.image_root = ""
+                        
+                if self.image_root:
+                    full_path = os.path.join(self.image_root, view_path)
+                else:
+                    full_path = view_path
+                    
+                try:
+                    img = Image.open(full_path).convert('RGB')
+                    images_out.append(self.image_preprocess(img))
+                except Exception:
+                    images_out.append(torch.zeros(3, 224, 224))
+                    
+            if self.num_views > 1:
+                image_tensor = torch.stack(images_out)
+            else:
+                image_tensor = images_out[0]
+                
+            return text, voxel, image_tensor, self.categories[idx]
             
         return text, voxel, self.categories[idx]
 
@@ -488,8 +507,13 @@ def create_dataloaders(
     base_cols = {"subtitle", "title", "description", "tags"}
     
     use_trimodal = cfg.get("model", {}).get("use_trimodal", False)
-    if use_trimodal and "view_00_path" in available_cols:
-        base_cols.add("view_00_path")
+    num_views = cfg.get("data", {}).get("num_views", 1)
+    
+    if use_trimodal:
+        for i in range(12):
+            col = f"view_{i:02d}_path"
+            if col in available_cols:
+                base_cols.add(col)
 
     if use_name_vocab and "voxel_name_data" in available_cols:
         base_cols.add("voxel_name_data")
@@ -579,7 +603,7 @@ def create_dataloaders(
         use_material_context = use_material_context,
         top_k_materials      = top_k_materials,
         image_preprocess     = image_preprocess,
-        image_column         = "view_00_path" if use_trimodal else None,
+        num_views            = num_views if use_trimodal else 1,
     )
 
     ds_train = SchematicDataset(

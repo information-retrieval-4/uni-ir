@@ -961,12 +961,21 @@ class TrimodalEncoder(nn.Module):
         return nn.functional.normalize(emb, dim=-1)
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
-        """Encode image using TinyCLIP, project, and L2-normalise."""
+        """Encode image using TinyCLIP, project, and L2-normalise. Supports multi-view."""
+        is_multiview = images.ndim == 5
+        if is_multiview:
+            B, V, C, H, W = images.shape
+            images = images.view(B * V, C, H, W)
+            
         requires_grad = any(p.requires_grad for p in self.clip_model.parameters())
         with torch.set_grad_enabled(requires_grad):
             emb = self.clip_model.encode_image(images)
             
         emb = self.clip_proj(emb)
+        
+        if is_multiview:
+            emb = emb.view(B, V, -1).mean(dim=1)
+            
         return nn.functional.normalize(emb, dim=-1)
 
     def forward(self, texts: list[str], voxels: torch.LongTensor, images: torch.Tensor = None):
