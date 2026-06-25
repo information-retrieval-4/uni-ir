@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from dataset import create_dataloaders
 from model import DualEncoder, TrimodalEncoder
-from model_pointbert import DualEncoderPointBERT
 from utils import load_config, set_seed, get_device, load_checkpoint
 
 
@@ -166,9 +165,6 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
     if use_trimodal:
         model = TrimodalEncoder(cfg, num_block_types=num_blocks).to(device)
         image_preprocess = getattr(model, "preprocess", None)
-    elif "pointbert" in cfg:
-        model = DualEncoderPointBERT(cfg, num_block_types=num_blocks).to(device)
-        image_preprocess = None
     else:
         model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
         image_preprocess = None
