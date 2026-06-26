@@ -376,6 +376,7 @@ class SchematicDataset(Dataset):
         text_column: str = None,
         image_preprocess = None,
         num_views: int = 1,
+        clip_cache_path: str = None,
     ):
         # Build text — priority: text_column > material_context > default
         if text_column and text_column in df.columns:
@@ -407,10 +408,15 @@ class SchematicDataset(Dataset):
         self.num_views = num_views
         self.image_paths_list = []
         
-        for i in range(12):
-            col = f"view_{i:02d}_path"
-            if col in df.columns:
-                self.image_paths_list.append(df[col].tolist())
+        self.cached_embeddings = None
+        if clip_cache_path and __import__("os").path.exists(clip_cache_path):
+            self.cached_embeddings = __import__("torch").load(clip_cache_path)
+            
+        if self.cached_embeddings is None:
+            for i in range(12):
+                col = f"view_{i:02d}_path"
+                if col in df.columns:
+                    self.image_paths_list.append(df[col].tolist())
                 
         self.image_root = None
 
@@ -424,6 +430,9 @@ class SchematicDataset(Dataset):
         )
         if self.augment:
             voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
+            
+        if self.cached_embeddings is not None:
+            return text, voxel, self.cached_embeddings[idx], self.categories[idx]
             
         if self.image_paths_list and self.image_preprocess is not None:
             import os
@@ -605,19 +614,27 @@ def create_dataloaders(
         image_preprocess     = image_preprocess,
         num_views            = num_views if use_trimodal else 1,
     )
+    
+    use_cached_clip = data_cfg.get("use_cached_clip", False)
 
     ds_train = SchematicDataset(
         df.iloc[idx_train].reset_index(drop=True),
         augment=augment, aug_apply_prob=aug_apply_prob,
-        aug_dropout_prob=aug_dropout_prob, text_column=train_text_col, **base_kwargs,
+        aug_dropout_prob=aug_dropout_prob, text_column=train_text_col, 
+        clip_cache_path="data/clip_cache/train.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
     ds_val  = SchematicDataset(
         df.iloc[idx_val].reset_index(drop=True),
-        augment=False, text_column=val_text_col, **base_kwargs,
+        augment=False, text_column=val_text_col, 
+        clip_cache_path="data/clip_cache/val.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
     ds_test = SchematicDataset(
         df.iloc[idx_test].reset_index(drop=True),
-        augment=False, text_column=val_text_col, **base_kwargs,
+        augment=False, text_column=val_text_col, 
+        clip_cache_path="data/clip_cache/test.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
 
     # --- loaders ------------------------------------------------------------

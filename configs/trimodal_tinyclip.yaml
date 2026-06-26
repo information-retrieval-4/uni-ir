@@ -5,6 +5,7 @@
 data:
   parquet_path: "data/data_merged_with_text.parquet"
   num_views: 4               # Number of views to pool
+  use_cached_clip: true      # Load precomputed embeddings instead of live images
   max_block_types: 256
   text_max_length: 256
   crop_bbox: true
