@@ -957,7 +957,7 @@ class TrimodalEncoder(nn.Module):
         with torch.set_grad_enabled(requires_grad):
             emb = self.clip_model.encode_text(tokens)
             
-        emb = self.clip_proj(emb)
+        emb = self.clip_proj(emb.to(self.clip_proj.weight.dtype))
         return nn.functional.normalize(emb, dim=-1)
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
@@ -974,12 +974,12 @@ class TrimodalEncoder(nn.Module):
                 
             requires_grad = any(p.requires_grad for p in self.clip_model.parameters())
             with torch.set_grad_enabled(requires_grad):
-                emb = self.clip_model.encode_image(images)
+                emb = self.clip_model.encode_image(images.to(next(self.clip_model.parameters()).dtype))
                 
             if is_multiview:
                 emb = emb.view(B, V, -1).mean(dim=1)
                 
-        emb = self.clip_proj(emb)
+        emb = self.clip_proj(emb.to(self.clip_proj.weight.dtype))
         return nn.functional.normalize(emb, dim=-1)
 
     def forward(self, texts: list[str], voxels: torch.LongTensor, images: torch.Tensor = None):
