@@ -19,7 +19,9 @@ data:
   renders_base: "data/renders"
   n_views: 12
   n_views_use: 6        # views yg dipakai per sample (evenly spaced, fixed — seperti TriCoLo)
-  # image_cache_path: otomatis → data/trimodal_image_cache_6views.pt (override kalau perlu)
+  # Cache paths otomatis (override kalau perlu):
+  # image_cache_path: → data/trimodal_image_cache_6views_clip-vit-large-patch14.pt
+  # text_cache_path:  → data/trimodal_text_cache_clip-vit-large-patch14.pt
   max_block_types: 672
   crop_bbox: true
   augment: true
@@ -45,9 +47,13 @@ model:
   freeze_image_encoder: true
   image_size: 224
 
+  # Projection type: "linear" (default, 1 layer) | "mlp" (2-layer GELU, TriCoLo-style)
+  # "mlp" dengan CLIP image: project tiap view dulu → average (lebih ekspresif)
+  proj_type: "mlp"
+
   # CLIP config (dipakai oleh text dan image encoder bila keduanya "clip")
-  clip_model: "openai/clip-vit-base-patch16"
-  clip_output_dim: 512          # 512 untuk ViT-B/16, 768 untuk ViT-L/14
+  clip_model: "openai/clip-vit-large-patch14"
+  clip_output_dim: 768          # 512 untuk ViT-B/16, 768 untuk ViT-L/14
 
   use_semantic_init: true
   semantic_init_freeze: false

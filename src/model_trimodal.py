@@ -1,16 +1,20 @@
 """Trimodal encoder: flexible Text + Image + Voxel encoders.
 
 Text encoder options  (model.text_encoder):
-  "clip"    — CLIP text model (frozen) + learnable Linear projection
-  "minilm"  — all-MiniLM-L6-v2 (frozen) + learnable Linear projection
+  "clip"    — CLIP text model (frozen) + learnable projection
+  "minilm"  — all-MiniLM-L6-v2 (frozen) + learnable projection
 
 Image encoder options (model.image_encoder):
-  "clip"    — CLIP ViT vision model (frozen) + learnable Linear projection
-              handles multi-view: input (B, N, 3, H, W) → mean-pool → (B, D)
+  "clip"    — CLIP ViT vision model (frozen) + learnable projection
+              handles multi-view: input (B, N, 3, H, W) → project → mean-pool → (B, D)
+
+Projection options (model.proj_type):
+  "linear"  — single Linear layer (default, original)
+  "mlp"     — two-layer MLP with GELU; for image: project-per-view then average (like TriCoLo)
 
 Voxel encoder (pointbert section):
-  pretrained_type: "vanilla" | "ulip"   — PointBERT or ULIP-2 weights
-  freeze_backbone: true | false         — Plan 2 or Plan 1
+  pretrained_type: "vanilla" | "ulip"
+  freeze_backbone: true | false
 """
 
 import torch
@@ -19,11 +23,31 @@ import torch.nn.functional as F
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared projection builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_proj(in_dim: int, out_dim: int, proj_type: str) -> nn.Module:
+    """Linear (default) or 2-layer MLP with GELU."""
+    if proj_type == "mlp":
+        return nn.Sequential(
+            nn.Linear(in_dim, in_dim),
+            nn.GELU(),
+            nn.Linear(in_dim, out_dim),
+        )
+    return nn.Linear(in_dim, out_dim)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Text encoders
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CLIPTextEncoder(nn.Module):
-    """CLIP text backbone (frozen) + learnable projection → embed_dim."""
+    """CLIP text backbone (frozen) + learnable projection → embed_dim.
+
+    Accepts either:
+      - list[str]      — raw text, runs full CLIP pipeline
+      - torch.Tensor   — pre-cached CLIP features (B, clip_out_dim), skips backbone
+    """
 
     def __init__(self, cfg: dict, processor):
         super().__init__()
@@ -42,16 +66,20 @@ class CLIPTextEncoder(nn.Module):
                 p.requires_grad = False
 
         clip_out_dim = cfg["model"].get("clip_output_dim", 512)
-        self.proj = nn.Linear(clip_out_dim, cfg["model"]["embed_dim"])
+        proj_type = cfg["model"].get("proj_type", "linear")
+        self.proj = _build_proj(clip_out_dim, cfg["model"]["embed_dim"], proj_type)
 
-    def forward(self, texts: list) -> torch.Tensor:
+    def forward(self, texts) -> torch.Tensor:
+        if isinstance(texts, torch.Tensor):
+            # cached path: (B, clip_out_dim) — skip frozen backbone
+            return F.normalize(self.proj(texts), dim=-1)
         device = next(self.parameters()).device
         inputs = self.processor(
             text=texts, padding=True, truncation=True,
             max_length=self.max_length, return_tensors="pt",
         ).to(device)
         out = self.text_model(**inputs)
-        feats = self.text_proj(out.pooler_output)   # (B, clip_out_dim)
+        feats = self.text_proj(out.pooler_output)
         return F.normalize(self.proj(feats), dim=-1)
 
     def backbone_params(self):
@@ -59,10 +87,7 @@ class CLIPTextEncoder(nn.Module):
 
 
 class MiniLMTextEncoder(nn.Module):
-    """all-MiniLM-L6-v2 (frozen) + learnable projection → embed_dim.
-
-    Reuses TextEncoder from model.py — no CLIP dependency.
-    """
+    """all-MiniLM-L6-v2 (frozen) + learnable projection → embed_dim."""
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -74,10 +99,11 @@ class MiniLMTextEncoder(nn.Module):
                 p.requires_grad = False
 
         text_hidden = cfg["model"].get("text_hidden_dim", 384)
-        self.proj = nn.Linear(text_hidden, cfg["model"]["embed_dim"])
+        proj_type = cfg["model"].get("proj_type", "linear")
+        self.proj = _build_proj(text_hidden, cfg["model"]["embed_dim"], proj_type)
 
-    def forward(self, texts: list) -> torch.Tensor:
-        feats = self.encoder(texts)                 # (B, text_hidden_dim)
+    def forward(self, texts) -> torch.Tensor:
+        feats = self.encoder(texts)
         return F.normalize(self.proj(feats), dim=-1)
 
     def backbone_params(self):
@@ -102,7 +128,12 @@ def build_text_encoder(cfg: dict, processor=None) -> nn.Module:
 class CLIPImageEncoder(nn.Module):
     """CLIP vision backbone (frozen) + learnable projection → embed_dim.
 
-    Handles multi-view input: (B, N_views, 3, H, W) → mean-pool → (B, embed_dim).
+    proj_type="linear": average views → project (original)
+    proj_type="mlp":    project each view → average (TriCoLo-style, more expressive)
+
+    Accepts:
+      - (B, N_views, 3, H, W)     — raw pixels, runs full CLIP pipeline
+      - (B, N_views, clip_out_dim) — pre-cached features, skips frozen backbone
     """
 
     def __init__(self, cfg: dict):
@@ -120,20 +151,30 @@ class CLIPImageEncoder(nn.Module):
                 p.requires_grad = False
 
         clip_out_dim = cfg["model"].get("clip_output_dim", 512)
-        self.proj = nn.Linear(clip_out_dim, cfg["model"]["embed_dim"])
+        proj_type = cfg["model"].get("proj_type", "linear")
+        self.proj = _build_proj(clip_out_dim, cfg["model"]["embed_dim"], proj_type)
+        self.proj_type = proj_type
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         if pixel_values.ndim == 3:
-            # cached path: (B, N_views, clip_out_dim) — skip frozen backbone
-            feats = pixel_values.mean(dim=1)            # (B, clip_out_dim)
+            # cached path: (B, N_views, clip_out_dim)
+            if self.proj_type == "mlp":
+                B, N, D = pixel_values.shape
+                feats = self.proj(pixel_values.view(B * N, D))  # project each view
+                feats = feats.view(B, N, -1).mean(dim=1)        # then average
+            else:
+                feats = self.proj(pixel_values.mean(dim=1))     # average then project
         else:
             # raw path: (B, N_views, 3, H, W)
             B, N, C, H, W = pixel_values.shape
             pv = pixel_values.view(B * N, C, H, W)
             out = self.vision_model(pixel_values=pv)
-            feats = self.visual_proj(out.pooler_output) # (B*N, clip_out_dim)
-            feats = feats.view(B, N, -1).mean(dim=1)    # (B, clip_out_dim)
-        return F.normalize(self.proj(feats), dim=-1)
+            raw = self.visual_proj(out.pooler_output)           # (B*N, clip_out_dim)
+            if self.proj_type == "mlp":
+                feats = self.proj(raw).view(B, N, -1).mean(dim=1)  # project then average
+            else:
+                feats = self.proj(raw.view(B, N, -1).mean(dim=1))  # average then project
+        return F.normalize(feats, dim=-1)
 
     def backbone_params(self):
         return list(self.vision_model.parameters()) + list(self.visual_proj.parameters())
@@ -148,7 +189,7 @@ def build_image_encoder(cfg: dict) -> nn.Module:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Voxel encoder (delegates to MinecraftPointBERTEncoder)
+# Voxel encoder
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_voxel_encoder(cfg: dict, num_block_types: int) -> nn.Module:
@@ -178,12 +219,7 @@ def build_voxel_encoder(cfg: dict, num_block_types: int) -> nn.Module:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TriModalEncoder(nn.Module):
-    """Unified trimodal encoder: text + image + voxel → shared embed_dim space.
-
-    All three modalities are L2-normalised into the same hypersphere.
-    Encoder types are selected via cfg['model']['text_encoder'] and
-    cfg['model']['image_encoder']; voxel encoder via cfg['pointbert'].
-    """
+    """Unified trimodal encoder: text + image + voxel → shared embed_dim space."""
 
     def __init__(self, cfg: dict, num_block_types: int, processor=None):
         super().__init__()
@@ -191,7 +227,7 @@ class TriModalEncoder(nn.Module):
         self.image_encoder = build_image_encoder(cfg)
         self.voxel_encoder = build_voxel_encoder(cfg, num_block_types)
 
-    def encode_text(self, texts: list) -> torch.Tensor:
+    def encode_text(self, texts) -> torch.Tensor:
         return self.text_encoder(texts)
 
     def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
@@ -231,7 +267,6 @@ class TriModalEncoder(nn.Module):
             },
         ]
 
-        # Optionally unfreeze text / image backbones
         if not cfg["model"].get("freeze_text_encoder", True):
             groups.append({
                 "name": "text_backbone",

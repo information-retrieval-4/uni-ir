@@ -77,7 +77,7 @@ def _build_image_cache(df: pd.DataFrame, cfg: dict, processor: CLIPProcessor, ca
     n_views_use = data_cfg.get("n_views_use", 6)
     image_size = cfg["model"].get("image_size", 224)
     view_indices = _view_indices_for(n_views, n_views_use)
-    batch_imgs = 32  # images per GPU batch during cache build
+    batch_imgs = 32
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     clip = CLIPModel.from_pretrained(clip_name)
@@ -91,7 +91,6 @@ def _build_image_cache(df: pd.DataFrame, cfg: dict, processor: CLIPProcessor, ca
     fallback = Image.new("RGB", (image_size, image_size), (0, 0, 0))
     N = len(df)
 
-    # Flatten all (sample × view) images into one list, then batch-encode
     all_imgs = []
     for i in range(N):
         row = df.iloc[i]
@@ -106,30 +105,78 @@ def _build_image_cache(df: pd.DataFrame, cfg: dict, processor: CLIPProcessor, ca
     total = len(all_imgs)
     all_feats = []
     with torch.no_grad():
-        for start in tqdm(range(0, total, batch_imgs), desc="[Cache] CLIP encode"):
+        for start in tqdm(range(0, total, batch_imgs), desc="[Cache] CLIP image encode"):
             batch = all_imgs[start:start + batch_imgs]
             pv = processor(images=batch, return_tensors="pt")["pixel_values"].to(device)
             out = vision_model(pixel_values=pv)
-            feats = visual_proj(out.pooler_output).cpu().half()  # (b, clip_out_dim) fp16
+            feats = visual_proj(out.pooler_output).cpu().half()
             all_feats.append(feats)
 
     del vision_model, visual_proj, all_imgs
-    cache = torch.cat(all_feats, dim=0).view(N, n_views_use, -1)  # (N, V, D)
+    cache = torch.cat(all_feats, dim=0).view(N, n_views_use, -1)
 
     os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
     torch.save(cache, cache_path)
-    print(f"[Cache] Saved {cache.shape} fp16 → {cache_path} "
+    print(f"[Cache] Image cache saved {cache.shape} fp16 → {cache_path} "
+          f"({cache.numel() * 2 / 1e6:.1f} MB)")
+    return cache
+
+
+def _build_text_cache(texts: list, cfg: dict, processor: CLIPProcessor, cache_path: str):
+    """Pre-extract frozen CLIP text features for all samples.
+
+    Saves (N, clip_out_dim) float16 tensor to cache_path.
+    Only usable when text_encoder: "clip".
+    """
+    from transformers import CLIPModel
+    from tqdm import tqdm
+
+    clip_name = cfg["model"].get("clip_model", "openai/clip-vit-base-patch16")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    clip = CLIPModel.from_pretrained(clip_name)
+    text_model = clip.text_model.to(device).eval()
+    text_proj = clip.text_projection.to(device).eval()
+    del clip
+
+    N = len(texts)
+    batch_size = 128
+    all_feats = []
+
+    print(f"[Cache] Building text cache for {N} samples on {device} ...")
+    with torch.no_grad():
+        for start in tqdm(range(0, N, batch_size), desc="[Cache] CLIP text encode"):
+            batch = texts[start:start + batch_size]
+            inputs = processor(
+                text=batch, padding=True, truncation=True,
+                max_length=77, return_tensors="pt",
+            ).to(device)
+            out = text_model(**inputs)
+            feats = text_proj(out.pooler_output).cpu().half()
+            all_feats.append(feats)
+
+    del text_model, text_proj
+    cache = torch.cat(all_feats, dim=0)
+
+    os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
+    torch.save(cache, cache_path)
+    print(f"[Cache] Text cache saved {cache.shape} fp16 → {cache_path} "
           f"({cache.numel() * 2 / 1e6:.1f} MB)")
     return cache
 
 
 class TriModalDataset(Dataset):
-    """Each item: (text, image_feats_or_pixels, voxel, category).
+    """Each item: (text_or_cached_feat, image_feats_or_pixels, voxel, category).
 
     When image_cache is provided:
       image output shape: (N_views, clip_out_dim)  — pre-extracted CLIP features
     Otherwise:
       image output shape: (N_views, 3, H, W)  — raw pixel values
+
+    When text_cache is provided:
+      text output: torch.Tensor (clip_out_dim,) — pre-extracted CLIP text features
+    Otherwise:
+      text output: str — raw text string
     """
 
     def __init__(
@@ -140,6 +187,7 @@ class TriModalDataset(Dataset):
         cfg: dict,
         split: str = "train",
         image_cache: Optional[torch.Tensor] = None,
+        text_cache: Optional[torch.Tensor] = None,
     ):
         data_cfg = cfg["data"]
         self.df = df.reset_index(drop=True)
@@ -157,8 +205,8 @@ class TriModalDataset(Dataset):
         self.fallback_img = Image.new("RGB", (self.image_size, self.image_size), (0, 0, 0))
         self._view_indices = _view_indices_for(self.n_views, self.n_views_use)
 
-        # image_cache: (N_subset, N_views, clip_out_dim) fp16 or None
-        self.image_cache = image_cache
+        self.image_cache = image_cache  # (N_subset, N_views, clip_out_dim) fp16 or None
+        self.text_cache = text_cache    # (N_subset, clip_out_dim) fp16 or None
 
         use_material_context = data_cfg.get("use_material_context", False)
         if use_material_context and "voxel_name_data" in df.columns:
@@ -178,13 +226,17 @@ class TriModalDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        text = self.texts[idx]
 
+        # text: cached tensor (clip_out_dim,) or raw string
+        if self.text_cache is not None:
+            text = self.text_cache[idx].float()
+        else:
+            text = self.texts[idx]
+
+        # image: cached (N_views, clip_out_dim) or raw (N_views, 3, H, W)
         if self.image_cache is not None:
-            # (N_views, clip_out_dim) fp16 → float32 for model
             pixel_values = self.image_cache[idx].float()
         else:
-            # load raw images → (N_views, 3, H, W)
             views = []
             for vi in self._view_indices:
                 img_path = resolve_image_path(row, self.renders_base, vi, self.n_views)
@@ -207,15 +259,19 @@ class TriModalDataset(Dataset):
 
 def _collate_trimodal(batch):
     texts, images, voxels, categories = zip(*batch)
-    return list(texts), torch.stack(images), torch.stack(voxels), list(categories)
+    # texts can be list[str] (raw) or list[Tensor] (cached)
+    if isinstance(texts[0], torch.Tensor):
+        texts_out = torch.stack(texts)  # (B, clip_out_dim)
+    else:
+        texts_out = list(texts)
+    return texts_out, torch.stack(images), torch.stack(voxels), list(categories)
 
 
 def create_trimodal_dataloaders(cfg: dict):
     """Load trimodal parquet, split train/val/test, return DataLoaders + metadata.
 
-    If cfg['data']['image_cache_path'] is set:
-      - Build cache on first run (one-time ~2-3 min), then load from disk.
-      - Training skips CLIP vision backbone entirely → ~10x faster per epoch.
+    Image cache: auto-enabled, auto-derived path from parquet location.
+    Text cache: auto-enabled when text_encoder: "clip" (cannot cache minilm this way).
 
     Returns:
         train_loader, val_loader, test_loader, block_mapping, num_block_types, processor
@@ -223,6 +279,7 @@ def create_trimodal_dataloaders(cfg: dict):
     data_cfg = cfg["data"]
     path = data_cfg["parquet_path"]
     clip_name = cfg["model"].get("clip_model", "openai/clip-vit-base-patch16")
+    data_dir = os.path.dirname(os.path.abspath(path))
 
     import pyarrow.parquet as pq
     available = set(pq.ParquetFile(path).schema_arrow.names)
@@ -245,28 +302,49 @@ def create_trimodal_dataloaders(cfg: dict):
     print(f"[Trimodal] Block vocab: {max_types} types")
 
     processor = CLIPProcessor.from_pretrained(clip_name)
-
-    # --- image cache (auto-enabled) ---
+    model_tag = clip_name.split("/")[-1]  # e.g. "clip-vit-large-patch14"
+    clip_out_dim = cfg["model"].get("clip_output_dim", 512)
     n_views_use = data_cfg.get("n_views_use", 6)
-    _default_cache = os.path.join(
-        os.path.dirname(os.path.abspath(path)),
-        f"trimodal_image_cache_{n_views_use}views.pt",
-    )
-    cache_path = data_cfg.get("image_cache_path", _default_cache)
-    image_cache = None
-    if cache_path:
-        if not os.path.exists(cache_path):
-            image_cache = _build_image_cache(df, cfg, processor, cache_path)
-        else:
-            image_cache = torch.load(cache_path, map_location="cpu", weights_only=True)
-            print(f"[Cache] Loaded image cache {image_cache.shape} from {cache_path}")
 
-        # sanity check: cache must match current config
-        n_views_use = data_cfg.get("n_views_use", 6)
-        if image_cache.shape[0] != len(df) or image_cache.shape[1] != n_views_use:
-            print(f"[Cache] WARNING: cache shape {image_cache.shape} doesn't match "
-                  f"({len(df)}, {n_views_use}, *). Rebuilding ...")
-            image_cache = _build_image_cache(df, cfg, processor, cache_path)
+    # --- image cache (always enabled) ---
+    _default_img_cache = os.path.join(data_dir, f"trimodal_image_cache_{n_views_use}views_{model_tag}.pt")
+    img_cache_path = data_cfg.get("image_cache_path", _default_img_cache)
+    image_cache = None
+    if not os.path.exists(img_cache_path):
+        image_cache = _build_image_cache(df, cfg, processor, img_cache_path)
+    else:
+        image_cache = torch.load(img_cache_path, map_location="cpu", weights_only=True)
+        print(f"[Cache] Loaded image cache {image_cache.shape} from {img_cache_path}")
+    if image_cache.shape[0] != len(df) or image_cache.shape[1] != n_views_use:
+        print(f"[Cache] WARNING: image cache shape {image_cache.shape} mismatch "
+              f"({len(df)}, {n_views_use}, *). Rebuilding ...")
+        image_cache = _build_image_cache(df, cfg, processor, img_cache_path)
+
+    # --- text cache (only for CLIP text encoder) ---
+    text_cache = None
+    if cfg["model"].get("text_encoder", "clip") == "clip":
+        use_material_context = data_cfg.get("use_material_context", False)
+        if use_material_context and "voxel_name_data" in df.columns:
+            top_k = data_cfg.get("top_k_materials", 5)
+            all_texts = [build_text_with_materials(df.iloc[i], top_k_materials=top_k)
+                         for i in range(len(df))]
+        else:
+            all_texts = [build_text(df.iloc[i]) for i in range(len(df))]
+
+        mat_tag = "_mat" if use_material_context else ""
+        _default_txt_cache = os.path.join(
+            data_dir, f"trimodal_text_cache_{model_tag}{mat_tag}.pt"
+        )
+        txt_cache_path = data_cfg.get("text_cache_path", _default_txt_cache)
+        if not os.path.exists(txt_cache_path):
+            text_cache = _build_text_cache(all_texts, cfg, processor, txt_cache_path)
+        else:
+            text_cache = torch.load(txt_cache_path, map_location="cpu", weights_only=True)
+            print(f"[Cache] Loaded text cache {text_cache.shape} from {txt_cache_path}")
+        if text_cache.shape[0] != len(df) or text_cache.shape[1] != clip_out_dim:
+            print(f"[Cache] WARNING: text cache shape {text_cache.shape} mismatch "
+                  f"({len(df)}, {clip_out_dim}). Rebuilding ...")
+            text_cache = _build_text_cache(all_texts, cfg, processor, txt_cache_path)
 
     # --- split ---
     val_split = data_cfg.get("val_split", 0.1)
@@ -293,10 +371,11 @@ def create_trimodal_dataloaders(cfg: dict):
     batch_size = cfg["training"]["batch_size"]
 
     def make_loader(indices, split):
-        cache_subset = image_cache[indices] if image_cache is not None else None
+        img_sub = image_cache[indices] if image_cache is not None else None
+        txt_sub = text_cache[indices] if text_cache is not None else None
         ds = TriModalDataset(
             df.iloc[indices], block_mapping, processor, cfg,
-            split=split, image_cache=cache_subset,
+            split=split, image_cache=img_sub, text_cache=txt_sub,
         )
         return DataLoader(
             ds,
