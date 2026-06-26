@@ -146,6 +146,14 @@ def remap_voxel(voxel_flat, mapping: dict, crop_bbox: bool = True,
 # Strategy 1: Name-Based Block Vocabulary
 # ---------------------------------------------------------------------------
 
+# All Minecraft air variants (with and without "minecraft:" namespace prefix)
+_AIR_NAMES: frozenset = frozenset({
+    "air", "minecraft:air",
+    "cave_air", "minecraft:cave_air",
+    "void_air", "minecraft:void_air",
+})
+
+
 def build_block_name_mapping(name_series: pd.Series, max_types: int = 256) -> dict:
     """Build compact index mapping from Minecraft block NAME strings.
 
@@ -154,9 +162,11 @@ def build_block_name_mapping(name_series: pd.Series, max_types: int = 256) -> di
     (all 'log' variants cluster near each other in embedding space).
 
     Index assignment:
-      0    = 'air'
+      0    = air (all air variants: "air", "minecraft:air", "cave_air", ...)
       1    = '<rare>' (blocks outside the top-(max_types-2))
       2..N = top-(max_types-2) most frequent non-air block names
+
+    Handles both namespaced ("minecraft:oak_log") and bare ("oak_log") block names.
 
     The special key '__index_to_name__' stores list[str] mapping compact_idx to
     block name, used by Strategy 2 for semantic embedding initialization.
@@ -165,13 +175,14 @@ def build_block_name_mapping(name_series: pd.Series, max_types: int = 256) -> di
     """
     counter: Counter = Counter()
     for name_arr in name_series:
-        arr = np.asarray(name_arr, dtype=str)
-        non_air = arr[(arr != "air") & (arr != "") & (arr != "nan")]
-        counter.update(non_air.tolist())
+        names = [str(n) for n in np.asarray(name_arr, dtype=object).tolist()]
+        non_air = [n for n in names if n not in _AIR_NAMES and n not in {"", "nan"}]
+        counter.update(non_air)
 
     top_names = [name for name, _ in counter.most_common(max_types - 2)]
 
-    mapping: dict = {"air": 0}
+    # All air variants map to index 0
+    mapping: dict = {name: 0 for name in _AIR_NAMES}
     index_to_name = ["air", "<rare>"]
 
     for i, name in enumerate(top_names, start=2):

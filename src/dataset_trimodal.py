@@ -298,8 +298,13 @@ def create_trimodal_dataloaders(cfg: dict):
 
     max_types = data_cfg["max_block_types"]
     block_mapping = build_block_name_mapping(df["voxel_name_data"], max_types=max_types)
+    # actual unique non-air names found (may be < max_types if dataset has fewer blocks)
+    n_unique = len([k for k in block_mapping
+                    if not k.startswith("__") and k not in {"air", "minecraft:air",
+                                                             "cave_air", "minecraft:cave_air",
+                                                             "void_air", "minecraft:void_air"}])
     num_block_types = max_types
-    print(f"[Trimodal] Block vocab: {max_types} types")
+    print(f"[Trimodal] Block vocab: {n_unique} unique non-air names → embedding size {max_types}")
 
     processor = CLIPProcessor.from_pretrained(clip_name)
     model_tag = clip_name.split("/")[-1]  # e.g. "clip-vit-large-patch14"
