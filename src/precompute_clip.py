@@ -45,7 +45,7 @@ def run_split(clip_model, dataloader, device, split_name, save_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/trimodal_tinyclip.yaml")
+    parser.add_argument("--config", type=str, default="configs/trimodal/trimodal_tinyclip.yaml")
     args = parser.parse_args()
 
     cfg = load_config(args.config)

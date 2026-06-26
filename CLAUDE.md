@@ -8,27 +8,27 @@ All scripts resolve paths from the repo root, not from `mc-retrieval/` (despite 
 
 ```bash
 # Bimodal training (text ↔ voxel)
-python src/train.py --config configs/cnn/default.yaml
-python src/train.py --config configs/pointbert/s1s2_semantic_init.yaml
-python src/train.py --config configs/pointbert/s1s2_plan1.yaml --warmstart checkpoints/pb_s1s2/best.pt
-python src/train.py --config configs/pointbert/s1s2_semantic_init.yaml --resume checkpoints/pb_s1s2/last.pt
+python src/train.py --config configs/cnn/cnn_default.yaml
+python src/train.py --config configs/pointbert/pb_s1s2_semantic_init.yaml
+python src/train.py --config configs/pointbert/pb_s1s2_plan1.yaml --warmstart checkpoints/pb_s1s2/best.pt
+python src/train.py --config configs/pointbert/pb_s1s2_semantic_init.yaml --resume checkpoints/pb_s1s2/last.pt
 
 # Trimodal training (text + image + voxel) — same entrypoint, dispatched by model.trimodal_variant
 python src/train.py --config configs/trimodal/pb_s1s2.yaml          # variant "pointbert" (HF CLIP ViT-L/14)
-python src/precompute_clip.py --config configs/trimodal_tinyclip.yaml  # required first for tinyclip
-python src/train.py --config configs/trimodal_tinyclip.yaml         # variant "tinyclip" (open_clip TinyCLIP)
+python src/precompute_clip.py --config configs/trimodal/trimodal_tinyclip.yaml  # required first for tinyclip
+python src/train.py --config configs/trimodal/trimodal_tinyclip.yaml         # variant "tinyclip" (open_clip TinyCLIP)
 
 # Evaluation
-python src/evaluate.py --config configs/pointbert/s1s2_semantic_init.yaml --checkpoint checkpoints/pb_s1s2/best.pt  # bimodal
-python src/evaluate.py --config configs/trimodal_tinyclip.yaml --checkpoint checkpoints/trimodal_tinyclip/best.pt   # tinyclip
+python src/evaluate.py --config configs/pointbert/pb_s1s2_semantic_init.yaml --checkpoint checkpoints/pb_s1s2/best.pt  # bimodal
+python src/evaluate.py --config configs/trimodal/trimodal_tinyclip.yaml --checkpoint checkpoints/trimodal_tinyclip/best.pt   # tinyclip
 python src/evaluate_trimodal.py --config configs/trimodal/pb_s1s2.yaml --checkpoint checkpoints/trimodal_pb_s1s2/best.pt  # pointbert
 
 # CNN-only pretraining (MVM/SimCLR/hybrid)
-python src/pretrain.py --config configs/cnn/default.yaml
+python src/pretrain.py --config configs/cnn/cnn_default.yaml
 
 # Baselines, demo
-python src/baselines.py --config configs/cnn/default.yaml
-python src/retrieval_demo.py --config configs/cnn/default.yaml --checkpoint checkpoints/best.pt
+python src/baselines.py --config configs/cnn/cnn_default.yaml
+python src/retrieval_demo.py --config configs/cnn/cnn_default.yaml --checkpoint checkpoints/best.pt
 ```
 
 ```bash
@@ -79,11 +79,13 @@ S1/S2/S3 require `voxel_name_data` column in parquet — falls back silently wit
 
 ```
 configs/
-  cnn/          # CNN voxel encoder (default.yaml, hybrid.yaml, simclr.yaml)
-  pointbert/    # Point-BERT bimodal (vanilla.yaml, s1s2_semantic_init.yaml, s1s2s3_all.yaml, finetune.yaml, ...)
-  trimodal/     # Trimodal (pb_s1s2.yaml — PointBERT + CLIP ViT-L/14 + 12-view renders)
-  ulip2/        # ULIP-2 pretrained Point-BERT variants
+  cnn/          # CNN voxel encoder (cnn_default.yaml, cnn_hybrid.yaml, cnn_simclr.yaml)
+  pointbert/    # Point-BERT bimodal (pointbert.yaml, pb_s1s2_semantic_init.yaml, pb_s1s2s3_all.yaml, pointbert_finetune.yaml, ...)
+  trimodal/     # Trimodal: pb_s1s2.yaml (variant "pointbert") + trimodal_tinyclip*.yaml (variant "tinyclip")
+  ulip2/        # ULIP-2 pretrained Point-BERT variants (ulip2_*.yaml)
 ```
+
+Folders are nested but filenames keep their original (pre-reorg) names, e.g. `configs/cnn/cnn_default.yaml`.
 
 Key config keys: `model.encoder_type`, `model.embed_dim` (256), `pointbert.freeze_backbone`, `data.text_mode`, `data.crop_bbox`, `data.augment`.
 

@@ -7,7 +7,7 @@
 #
 # Cara pakai:
 #   python src/train.py \
-#     --config configs/ulip2_pointbert_8k_plan1.yaml \
+#     --config configs/ulip2/ulip2_pointbert_8k_plan1.yaml \
 #     --warmstart checkpoints/ulip2_pointbert_8k/best.pt
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -106,7 +106,7 @@ def get_masked_and_recon(model, voxel, mask_ratio, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/pretrained_voxel.pt")
     parser.add_argument("--output", type=str, default="mvm_reconstruction_3d.png")
     parser.add_argument("--sample-idx", type=int, default=None)

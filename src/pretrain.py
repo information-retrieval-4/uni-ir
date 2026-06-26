@@ -560,7 +560,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Pretrain voxel encoder via masked voxel modeling"
     )
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     args = parser.parse_args()
 
     cfg = load_config(args.config)

@@ -191,7 +191,7 @@ def plot_per_category(coords, categories, top_cats, cat_colors, short_names,
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize embedding space")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best.pt")
     parser.add_argument("--output", type=str, default="embedding_space.png")
     args = parser.parse_args()

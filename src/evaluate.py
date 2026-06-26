@@ -287,7 +287,7 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate retrieval model")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default=None)
     args = parser.parse_args()
 

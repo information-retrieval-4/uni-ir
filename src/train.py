@@ -499,7 +499,7 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train multimodal MC retrieval model")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument(
         "--pretrained",
         type=str,

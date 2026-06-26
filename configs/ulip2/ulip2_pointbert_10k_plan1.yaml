@@ -1,19 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Point-BERT — S1+S2 Plan 1 (Full Fine-Tune, Unfreeze Backbone)
+# ULIP-2 PointBERT 10K — Plan 1 (Full Fine-Tune)
 #
 # Phase 2 dari freeze→unfreeze pipeline:
-#   Phase 1 → pb_s1s2_semantic_init.yaml  (freeze_backbone=true)
-#   Phase 2 → file ini                    (freeze_backbone=false, warmstart Phase 1)
+#   Phase 1 → ulip2_pointbert_10k.yaml  (freeze_backbone=true)
+#   Phase 2 → file ini                  (freeze_backbone=false, warmstart Phase 1)
 #
 # Cara pakai:
 #   python src/train.py \
-#     --config configs/pb_s1s2_plan1.yaml \
-#     --warmstart checkpoints/pb_s1s2_semantic_init_512/best.pt
+#     --config configs/ulip2/ulip2_pointbert_10k_plan1.yaml \
+#     --warmstart checkpoints/ulip2_pointbert_10k/best.pt
 # ─────────────────────────────────────────────────────────────────────────────
 
 data:
   parquet_path: "data/data_merged_with_text.parquet"
-  text_mode: "cleaned_aug"
+  text_mode: "cleaned_aug"  # "default" | "cleaned" | "cleaned_aug"
   max_block_types: 672
   text_max_length: 256
   crop_bbox: true
@@ -40,16 +40,16 @@ model:
   semantic_init_freeze: false
 
 pointbert:
-  freeze_backbone: false       # ← unfreeze backbone (Plan 1)
-  pretrained_type: "vanilla"
-  pretrained_path: null        # null = skip load; weights dari --warmstart
+  freeze_backbone: false      # ← unfreeze backbone (Plan 1)
+  pretrained_type: "ulip"     # hanya menentukan arsitektur; weights dari --warmstart
+  pretrained_path: null       # null = tidak load ulang ULIP; --warmstart yang load Phase 1 weights
   trans_dim: 384
   depth: 12
   num_heads: 6
   mlp_ratio: 4.0
   drop_path: 0.1
-  num_points: 512              # ← HARUS sama dengan Phase 1
-  block_embed_dim: 128         # ← HARUS sama dengan Phase 1
+  num_points: 1024
+  block_embed_dim: 256        # ← HARUS sama dengan Phase 1 (128 → 256)
   dropout: 0.1
   use_fps_eval: true
 
@@ -57,17 +57,17 @@ training:
   batch_size: 128
   epochs: 100
   weight_decay: 1.0e-2
-  lr_adapter: 3.0e-4
+  lr_adapter: 3.0e-4         # projection head + block_embedding
   lr_head: 1.0e-4
   lr_text_proj: 1.0e-4
-  lr_backbone: 5.0e-6          # backbone — kecil supaya tidak destroy Phase 1 weights
+  lr_backbone: 5.0e-6        # backbone PointBERT — kecil supaya tidak overfit
   temperature_init: 0.07
   warmup_ratio: 0.05
-  early_stopping_patience: 20
-  num_workers: 2
-  checkpoint_dir: "checkpoints/pb_s1s2_plan1"
+  early_stopping_patience: 15
+  num_workers: 4
+  checkpoint_dir: "checkpoints/ulip2_pointbert_10k_plan1"
   use_amp: true
 
 eval:
   recall_k: [1, 5, 10]
-  batch_size: 128
+  batch_size: 32

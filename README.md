@@ -61,10 +61,10 @@ All commands run from `mc-retrieval/`.
 
 ```bash
 # Plain CNN baseline
-python src/train.py --config configs/default.yaml
+python src/train.py --config configs/cnn/cnn_default.yaml
 
 # With MVM pretrained voxel encoder
-python src/train.py --config configs/default.yaml \
+python src/train.py --config configs/cnn/cnn_default.yaml \
     --pretrained checkpoints/pretrained_voxel.pt
 ```
 
@@ -74,23 +74,23 @@ Point-BERT configuration is toggled by setting `encoder_type: "pointbert"` in yo
 
 ```bash
 # Frozen backbone (recommended starting point)
-python src/train.py --config configs/pointbert.yaml
+python src/train.py --config configs/pointbert/pointbert.yaml
 
 # With semantic strategies S1+S2
-python src/train.py --config configs/pb_s1s2_semantic_init.yaml
+python src/train.py --config configs/pointbert/pb_s1s2_semantic_init.yaml
 
 # With all strategies S1+S2+S3
-python src/train.py --config configs/pb_s1s2s3_all.yaml
+python src/train.py --config configs/pointbert/pb_s1s2s3_all.yaml
 
 # Full fine-tune warm-started from Plan 2 checkpoint
-python src/train.py --config configs/pointbert_finetune.yaml \
+python src/train.py --config configs/pointbert/pointbert_finetune.yaml \
     --warmstart checkpoints/pointbert_plan2/best.pt
 ```
 
 ### MVM Pretraining (CNN only)
 
 ```bash
-python src/pretrain.py --config configs/default.yaml
+python src/pretrain.py --config configs/cnn/cnn_default.yaml
 ```
 
 ---
@@ -99,7 +99,7 @@ python src/pretrain.py --config configs/default.yaml
 
 ```bash
 # evaluate.py auto-detects CNN vs Point-BERT from config
-python src/evaluate.py --config configs/pb_s1s2s3_all.yaml \
+python src/evaluate.py --config configs/pointbert/pb_s1s2s3_all.yaml \
     --checkpoint checkpoints/pb_s1s2s3_all/best_model.pth
 ```
 

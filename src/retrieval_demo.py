@@ -1,8 +1,8 @@
 """Interactive Text→Build Retrieval Demo.
 
 Usage:
-  python src/retrieval_demo.py --config configs/pb_s1s2_semantic_init.yaml
-  python src/retrieval_demo.py --config configs/pb_s1s2_semantic_init.yaml --top_k 3 --split test
+  python src/retrieval_demo.py --config configs/pointbert/pb_s1s2_semantic_init.yaml
+  python src/retrieval_demo.py --config configs/pointbert/pb_s1s2_semantic_init.yaml --top_k 3 --split test
 """
 
 import argparse
