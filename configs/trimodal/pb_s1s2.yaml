@@ -34,6 +34,7 @@ data:
   seed: 42
 
 model:
+  trimodal_variant: "pointbert"  # farhan scheme: HF CLIP ViT-L/14 + PointBERT + TriModalCLIPLoss
   encoder_type: "trimodal"
   embed_dim: 256
 

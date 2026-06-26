@@ -17,8 +17,9 @@ data:
   seed: 42
 
 model:
+  trimodal_variant: "tinyclip"  # spunn scheme: open_clip TinyCLIP + NTXent loss
   encoder_type: "cnn"        # Or "pointbert" to use the Point-BERT voxel branch
-  use_trimodal: true         # Enable trimodal forward pass, losses, and dataset image loading
+  use_trimodal: true         # (back-compat) enable trimodal forward pass + image loading
   embed_dim: 256             # Shared embedding space dim
   
   # Voxel CNN branch params
