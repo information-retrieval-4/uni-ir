@@ -228,7 +228,7 @@ def run_baselines(cfg: dict, checkpoint_path: str = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run baseline evaluations")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Checkpoint for voxel-only baseline (best model)")
     args = parser.parse_args()

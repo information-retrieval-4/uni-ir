@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from dataset import create_dataloaders
-from model import DualEncoder
+from model import DualEncoder, TrimodalEncoder
 from utils import load_config, set_seed, get_device, load_checkpoint
 
 
@@ -17,31 +17,42 @@ from utils import load_config, set_seed, get_device, load_checkpoint
 
 @torch.no_grad()
 def extract_embeddings(model, loader, device):
-    """Run model on all batches and collect embeddings + metadata.
-
-    Returns:
-        text_embs:    (N, D) tensor
-        voxel_embs:   (N, D) tensor
-        all_texts:    list of N strings
-        all_categories: list of N category strings
-    """
     model.eval()
-    text_embs, voxel_embs = [], []
+    text_embs, voxel_embs, image_embs = [], [], []
     all_texts = []
     all_categories = []
 
-    for texts, voxels, categories in tqdm(loader, desc="Encoding", leave=False):
+    for batch in tqdm(loader, desc="Encoding", leave=False):
+        if len(batch) == 4:
+            texts, voxels, images, categories = batch
+            images = images.to(device)
+        else:
+            texts, voxels, categories = batch
+            images = None
+
         voxels = voxels.to(device)
+        
         t_emb = model.encode_text(texts)
         v_emb = model.encode_voxel(voxels)
+        
         text_embs.append(t_emb.cpu())
         voxel_embs.append(v_emb.cpu())
+        
+        if images is not None:
+            i_emb = model.encode_image(images)
+            image_embs.append(i_emb.cpu())
+            
         all_texts.extend(texts)
         all_categories.extend(categories)
 
     text_embs = torch.cat(text_embs, dim=0)
     voxel_embs = torch.cat(voxel_embs, dim=0)
-    return text_embs, voxel_embs, all_texts, all_categories
+    if len(image_embs) > 0:
+        image_embs = torch.cat(image_embs, dim=0)
+    else:
+        image_embs = None
+        
+    return text_embs, voxel_embs, image_embs, all_texts, all_categories
 
 
 # ---------------------------------------------------------------------------
@@ -146,14 +157,38 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
         checkpoint_path = f"{cfg['training']['checkpoint_dir']}/best.pt"
     ckpt = load_checkpoint(checkpoint_path, device)
 
-    # rebuild data loaders
-    _, _, test_loader, block_mapping, num_blocks, _ = create_dataloaders(cfg)
+    # resolve scheme: "tinyclip" (spunn) vs bimodal.
+    # The "pointbert" (farhan) variant is evaluated via evaluate_trimodal.py.
+    m = cfg.get("model", {})
+    variant = m.get("trimodal_variant")
+    if variant is None and m.get("use_trimodal", False):
+        variant = "tinyclip"
+    if variant is None and m.get("encoder_type") == "trimodal":
+        variant = "pointbert"
 
-    model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
-    model.load_state_dict(ckpt["model_state"])
+    if variant == "pointbert":
+        raise SystemExit(
+            "Config ini memakai varian trimodal 'pointbert' — evaluasi dengan "
+            "`python src/evaluate_trimodal.py --config ...`."
+        )
+
+    if variant == "tinyclip":
+        # spunn: build model first (provides CLIP image preprocess), then data
+        num_blocks = cfg["data"]["max_block_types"]
+        model = TrimodalEncoder(cfg, num_block_types=num_blocks).to(device)
+        image_preprocess = getattr(model, "preprocess", None)
+        model.load_state_dict(ckpt["model_state"])
+        _, _, test_loader, block_mapping, num_blocks, _ = create_dataloaders(
+            cfg, image_preprocess=image_preprocess
+        )
+    else:
+        # bimodal: build data first (provides num_blocks matching ckpt), then model
+        _, _, test_loader, block_mapping, num_blocks, _ = create_dataloaders(cfg)
+        model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
+        model.load_state_dict(ckpt["model_state"])
 
     # extract embeddings
-    text_embs, voxel_embs, texts, categories = extract_embeddings(model, test_loader, device)
+    text_embs, voxel_embs, image_embs, texts, categories = extract_embeddings(model, test_loader, device)
     print(f"Extracted {len(text_embs)} embeddings (dim={text_embs.shape[1]})")
 
     # show category distribution
@@ -179,6 +214,22 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
     for k, v in v2t.items():
         print(f"    {k}: {v:.4f}")
 
+    if image_embs is not None:
+        i2v = compute_retrieval_metrics(image_embs, voxel_embs, ks=ks)
+        print("\n  Image → Voxel:")
+        for k, v in i2v.items():
+            print(f"    {k}: {v:.4f}")
+
+        v2i = compute_retrieval_metrics(voxel_embs, image_embs, ks=ks)
+        print("\n  Voxel → Image:")
+        for k, v in v2i.items():
+            print(f"    {k}: {v:.4f}")
+            
+        t2i = compute_retrieval_metrics(text_embs, image_embs, ks=ks)
+        print("\n  Text → Image:")
+        for k, v in t2i.items():
+            print(f"    {k}: {v:.4f}")
+
     # --- category-level ---
     print("\n" + "=" * 50)
     print("CATEGORY-LEVEL RETRIEVAL")
@@ -193,8 +244,24 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
     print("\n  Voxel → Text (category match):")
     for k, v in v2t_cat.items():
         print(f"    {k}: {v:.4f}")
+        
+    if image_embs is not None:
+        i2v_cat = compute_category_metrics(image_embs, voxel_embs, categories, categories, ks=ks)
+        print("\n  Image → Voxel (category match):")
+        for k, v in i2v_cat.items():
+            print(f"    {k}: {v:.4f}")
 
-    return {
+        v2i_cat = compute_category_metrics(voxel_embs, image_embs, categories, categories, ks=ks)
+        print("\n  Voxel → Image (category match):")
+        for k, v in v2i_cat.items():
+            print(f"    {k}: {v:.4f}")
+            
+        t2i_cat = compute_category_metrics(text_embs, image_embs, categories, categories, ks=ks)
+        print("\n  Text → Image (category match):")
+        for k, v in t2i_cat.items():
+            print(f"    {k}: {v:.4f}")
+
+    res = {
         "text_to_voxel": t2v,
         "voxel_to_text": v2t,
         "text_to_voxel_cat": t2v_cat,
@@ -202,6 +269,16 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
         "texts": texts,
         "categories": categories,
     }
+    
+    if image_embs is not None:
+        res["image_to_voxel"] = i2v
+        res["voxel_to_image"] = v2i
+        res["text_to_image"] = t2i
+        res["image_to_voxel_cat"] = i2v_cat
+        res["voxel_to_image_cat"] = v2i_cat
+        res["text_to_image_cat"] = t2i_cat
+
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +287,7 @@ def evaluate(cfg: dict, checkpoint_path: str = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate retrieval model")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default=None)
     args = parser.parse_args()
 

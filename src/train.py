@@ -13,8 +13,8 @@ from torch.amp import autocast
 from tqdm import tqdm
 
 from dataset import create_dataloaders
-from model import DualEncoder
-from losses import CLIPLoss
+from model import DualEncoder, TrimodalEncoder
+from losses import CLIPLoss, NTXentLoss
 from utils import load_config, set_seed, get_device, save_checkpoint
 
 
@@ -26,6 +26,26 @@ def count_params(model: nn.Module):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen    = sum(p.numel() for p in model.parameters() if not p.requires_grad)
     return trainable, frozen
+
+def resolve_variant(cfg: dict):
+    """Resolve which trimodal scheme to run.
+
+    Returns "pointbert" (farhan: HF CLIP ViT-L/14 + PointBERT + TriModalCLIPLoss),
+    "tinyclip" (spunn: open_clip TinyCLIP + NTXent), or None (bimodal).
+
+    Canonical key: model.trimodal_variant. Back-compat with the older toggles
+    (model.use_trimodal → tinyclip; model.encoder_type == "trimodal" → pointbert).
+    """
+    m = cfg.get("model", {})
+    v = m.get("trimodal_variant")
+    if v in ("pointbert", "tinyclip"):
+        return v
+    if m.get("use_trimodal", False):
+        return "tinyclip"
+    if m.get("encoder_type") == "trimodal":
+        return "pointbert"
+    return None
+
 
 def print_param_groups(groups: list):
     print("\n  Optimizer Parameter Groups:")
@@ -69,50 +89,116 @@ def augment_voxels(voxels: torch.LongTensor) -> torch.LongTensor:
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(
-    model, loader, criterion, optimizer, scheduler, device, augment=True, use_amp=False
+    model, loader, criterion, optimizer, scheduler, device,
+    augment=True, use_amp=False, variant=None,
 ):
     model.train()
     total_loss = 0.0
     num_batches = 0
 
     pbar = tqdm(loader, desc="  train", leave=False)
-    for texts, voxels, _categories in pbar:
-        voxels = voxels.to(device)
-
-        if augment:
-            voxels = augment_voxels(voxels)
-
+    for batch in pbar:
         optimizer.zero_grad()
+        sub = None
 
-        with autocast('cuda', enabled=use_amp):
-            text_emb, voxel_emb = model(texts, voxels)
-            loss = criterion(text_emb, voxel_emb)
+        if variant == "pointbert":
+            # farhan: batch = (texts, images, voxels, cats); model → (t, i, v)
+            texts, images, voxels, _cats = batch
+            images = images.to(device)
+            voxels = voxels.to(device)
+            if augment:
+                voxels = augment_voxels(voxels)
+            with autocast('cuda', enabled=use_amp):
+                t_emb, i_emb, v_emb = model(texts, images, voxels)
+                loss, sub = criterion(t_emb, i_emb, v_emb)
+        elif variant == "tinyclip":
+            # spunn: batch = (texts, voxels, images, cats); model → (t, v, i)
+            if len(batch) == 4:
+                texts, voxels, images, _cats = batch
+                images = images.to(device)
+            else:
+                texts, voxels, _cats = batch
+                images = None
+            voxels = voxels.to(device)
+            if augment:
+                voxels = augment_voxels(voxels)
+            with autocast('cuda', enabled=use_amp):
+                if images is not None:
+                    t_emb, v_emb, i_emb = model(texts, voxels, images)
+                    loss = (criterion(t_emb, v_emb) + criterion(i_emb, v_emb) + criterion(t_emb, i_emb)) / 3.0
+                else:
+                    t_emb, v_emb = model(texts, voxels)
+                    loss = criterion(t_emb, v_emb)
+        else:
+            # bimodal: batch = (texts, voxels, cats); model → (t, v)
+            texts, voxels, _cats = batch
+            voxels = voxels.to(device)
+            if augment:
+                voxels = augment_voxels(voxels)
+            with autocast('cuda', enabled=use_amp):
+                text_emb, voxel_emb = model(texts, voxels)
+                loss = criterion(text_emb, voxel_emb)
 
         loss.backward()
-        all_params = list(model.parameters()) + list(criterion.parameters())
-        nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+        nn.utils.clip_grad_norm_(
+            list(model.parameters()) + list(criterion.parameters()), max_norm=1.0
+        )
         optimizer.step()
-
         total_loss += loss.item()
         num_batches += 1
-        pbar.set_postfix(
-            loss=f"{loss.item():.4f}", τ=f"{criterion.temperature.item():.4f}"
-        )
+
+        if sub is not None:
+            pbar.set_postfix(
+                loss=f"{loss.item():.4f}",
+                TI=f"{sub['loss_TI']:.3f}",
+                TV=f"{sub['loss_TV']:.3f}",
+                IV=f"{sub['loss_IV']:.3f}",
+                τ=f"{criterion.temperature.item():.4f}",
+            )
+        elif hasattr(criterion, "temperature"):
+            temp = criterion.temperature.item() if isinstance(criterion.temperature, torch.Tensor) else criterion.temperature
+            pbar.set_postfix(loss=f"{loss.item():.4f}", τ=f"{temp:.4f}")
+        else:
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     return total_loss / max(num_batches, 1)
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, device, use_amp=False):
+def validate(model, loader, criterion, device, use_amp=False, variant=None):
     model.eval()
     total_loss = 0.0
     num_batches = 0
 
-    for texts, voxels, _categories in tqdm(loader, desc="  val  ", leave=False):
-        voxels = voxels.to(device)
-        with autocast('cuda', enabled=use_amp):
-            text_emb, voxel_emb = model(texts, voxels)
-            loss = criterion(text_emb, voxel_emb)
+    for batch in tqdm(loader, desc="  val  ", leave=False):
+        if variant == "pointbert":
+            texts, images, voxels, _cats = batch
+            images = images.to(device)
+            voxels = voxels.to(device)
+            with autocast('cuda', enabled=use_amp):
+                t_emb, i_emb, v_emb = model(texts, images, voxels)
+                loss, _ = criterion(t_emb, i_emb, v_emb)
+        elif variant == "tinyclip":
+            if len(batch) == 4:
+                texts, voxels, images, _cats = batch
+                images = images.to(device)
+            else:
+                texts, voxels, _cats = batch
+                images = None
+            voxels = voxels.to(device)
+            with autocast('cuda', enabled=use_amp):
+                if images is not None:
+                    t_emb, v_emb, i_emb = model(texts, voxels, images)
+                    loss = (criterion(t_emb, v_emb) + criterion(i_emb, v_emb) + criterion(t_emb, i_emb)) / 3.0
+                else:
+                    t_emb, v_emb = model(texts, voxels)
+                    loss = criterion(t_emb, v_emb)
+        else:
+            texts, voxels, _cats = batch
+            voxels = voxels.to(device)
+            with autocast('cuda', enabled=use_amp):
+                text_emb, voxel_emb = model(texts, voxels)
+                loss = criterion(text_emb, voxel_emb)
         total_loss += loss.item()
         num_batches += 1
 
@@ -154,6 +240,44 @@ def build_scheduler(optimizer, cfg: dict):
         return scheduler
 
 
+def _init_semantic_trimodal(model, block_mapping: dict, cfg: dict, device):
+    """Init voxel block_embedding using CLIP text encoder embeddings + PCA."""
+    from sklearn.decomposition import PCA
+    index_to_name = block_mapping["__index_to_name__"]
+    ve = model.voxel_encoder
+    vocab_size = ve.block_embedding.num_embeddings
+    block_embed_dim = ve.block_embedding.embedding_dim
+    print(f"\n[Trimodal Strategy 2] Initializing block_embedding "
+          f"(vocab={vocab_size}, dim={block_embed_dim}) via CLIP text encoder...")
+
+    model.eval()
+    names = list(index_to_name)[:vocab_size]
+    batch_sz = 64
+    all_embs = []
+    with torch.no_grad():
+        for i in range(0, len(names), batch_sz):
+            chunk = names[i:i + batch_sz]
+            emb = model.encode_text(chunk).cpu()
+            all_embs.append(emb)
+    all_embs = torch.cat(all_embs, dim=0).float().numpy()
+
+    clip_dim = all_embs.shape[1]
+    if clip_dim != block_embed_dim:
+        pca = PCA(n_components=block_embed_dim)
+        all_embs = pca.fit_transform(all_embs)
+
+    init_w = torch.from_numpy(all_embs).float()
+    if init_w.shape[0] < vocab_size:
+        pad = torch.zeros(vocab_size - init_w.shape[0], block_embed_dim)
+        init_w = torch.cat([init_w, pad], dim=0)
+
+    ve.block_embedding.weight.data.copy_(init_w)
+    if cfg["model"].get("semantic_init_freeze", False):
+        ve.block_embedding.weight.requires_grad = False
+    model.train()
+    print("[Trimodal Strategy 2] Done.\n")
+
+
 def load_resume_checkpoint(path, model, optimizer, scheduler, criterion, device):
     ckpt = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
@@ -168,20 +292,43 @@ def load_resume_checkpoint(path, model, optimizer, scheduler, criterion, device)
 
 
 def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, resume_path: str = None):
-    """Full training run."""
+    """Full training run (supports bimodal and trimodal encoder types)."""
     set_seed(cfg["data"]["seed"])
     device = get_device()
     use_amp = cfg["training"].get("use_amp", False) and device.type == "cuda"
+    variant = resolve_variant(cfg)   # "pointbert" | "tinyclip" | None
     print(f"Device: {device}")
     print(f"AMP   : {'enabled' if use_amp else 'disabled'}")
+    if variant == "pointbert":
+        print("Mode  : TRIMODAL (PointBERT + CLIP ViT-L/14)")
+    elif variant == "tinyclip":
+        print("Mode  : TRIMODAL (TinyCLIP / open_clip)")
 
-    # --- data ---
-    train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = (
-        create_dataloaders(cfg)
-    )
+    num_blocks = cfg["data"]["max_block_types"]
 
-    # --- model ---
-    model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
+    # --- model + dataloaders (build order depends on variant) ---
+    if variant == "tinyclip":
+        # spunn: build model first (provides CLIP image preprocess), then data
+        model = TrimodalEncoder(cfg, num_block_types=num_blocks).to(device)
+        image_preprocess = getattr(model, "preprocess", None)
+        train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = (
+            create_dataloaders(cfg, image_preprocess=image_preprocess)
+        )
+    elif variant == "pointbert":
+        # farhan: build dataloaders first (provide CLIP processor), then model
+        from dataset_trimodal import create_trimodal_dataloaders
+        train_loader, val_loader, test_loader, block_mapping, num_blocks, processor = (
+            create_trimodal_dataloaders(cfg)
+        )
+        block_names = None
+        from model_trimodal import TriModalEncoder
+        model = TriModalEncoder(cfg, num_block_types=num_blocks, processor=processor).to(device)
+    else:
+        # bimodal
+        train_loader, val_loader, test_loader, block_mapping, num_blocks, block_names = (
+            create_dataloaders(cfg)
+        )
+        model = DualEncoder(cfg, num_block_types=num_blocks).to(device)
 
     # --- load pretrained voxel encoder weights (for CNN typically) ---
     if pretrained_path and os.path.exists(pretrained_path):
@@ -207,10 +354,17 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
         print(f"[WarmStart] Unexpected keys: {len(unexpected)}\n")
 
     # --- Semantic init logic ---
-    if cfg["model"].get("semantic_init", False) and not pretrained_path and not warmstart_path:
-        from model import apply_semantic_init
-        if getattr(model.voxel_encoder, "init_semantic_embeddings", None) is not None:
-            # pointbert branch handles it internally with text encoder
+    use_sem_init = (
+        cfg["model"].get("use_semantic_init", cfg["model"].get("semantic_init", False))
+        and not pretrained_path
+        and not warmstart_path
+    )
+    if use_sem_init:
+        if variant == "pointbert":
+            # Use CLIP text encoder to init block_embedding, then PCA → block_embed_dim
+            if "__index_to_name__" in block_mapping:
+                _init_semantic_trimodal(model, block_mapping, cfg, device)
+        elif getattr(model.voxel_encoder, "init_semantic_embeddings", None) is not None:
             if "__index_to_name__" in block_mapping:
                 print("\n[Strategy 2] Initializing PointBERT block_embedding with semantic names...")
                 freeze_emb = cfg["model"].get("semantic_init_freeze", False)
@@ -220,7 +374,7 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
                     freeze         = freeze_emb,
                 )
         else:
-            # cnn branch
+            from model import apply_semantic_init
             apply_semantic_init(
                 voxel_embedding_layer=model.voxel_encoder.block_embedding,
                 text_encoder=model.text_encoder,
@@ -229,7 +383,19 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
                 device=device,
             )
 
-    criterion = CLIPLoss(temperature_init=cfg["training"]["temperature_init"]).to(device)
+    if variant == "pointbert":
+        from losses import TriModalCLIPLoss
+        tr_cfg = cfg["training"]
+        criterion = TriModalCLIPLoss(
+            temperature_init=tr_cfg.get("temperature_init", 0.07),
+            lambda_ti=tr_cfg.get("lambda_ti", 1.0),
+            lambda_tv=tr_cfg.get("lambda_tv", 1.0),
+            lambda_iv=tr_cfg.get("lambda_iv", 1.0),
+        ).to(device)
+    elif variant == "tinyclip":
+        criterion = NTXentLoss(temperature=cfg["training"].get("temperature_init", 0.07)).to(device)
+    else:
+        criterion = CLIPLoss(temperature_init=cfg["training"].get("temperature_init", 0.07)).to(device)
 
     # count params
     trainable, frozen = count_params(model)
@@ -271,19 +437,30 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
         t0 = time.time()
 
         train_loss = train_one_epoch(
-            model, train_loader, criterion, optimizer, scheduler, device, use_amp=use_amp
+            model, train_loader, criterion, optimizer, scheduler, device,
+            use_amp=use_amp, variant=variant,
         )
-        val_loss = validate(model, val_loader, criterion, device, use_amp=use_amp)
+        val_loss = validate(model, val_loader, criterion, device, use_amp=use_amp, variant=variant)
 
         elapsed = time.time() - t0
         lr_current = optimizer.param_groups[0]["lr"]
-        print(
-            f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
-            f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
-            f"τ={criterion.temperature.item():.4f}  "
-            f"lr={lr_current:.2e}  "
-            f"time={elapsed:.1f}s"
-        )
+        
+        if hasattr(criterion, 'temperature'):
+            temp = criterion.temperature.item() if isinstance(criterion.temperature, torch.Tensor) else criterion.temperature
+            print(
+                f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
+                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+                f"τ={temp:.4f}  "
+                f"lr={lr_current:.2e}  "
+                f"time={elapsed:.1f}s"
+            )
+        else:
+            print(
+                f"Epoch {epoch:3d}/{train_cfg['epochs']}  "
+                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+                f"lr={lr_current:.2e}  "
+                f"time={elapsed:.1f}s"
+            )
 
         scheduler.step()
 
@@ -322,7 +499,7 @@ def train(cfg: dict, pretrained_path: str = None, warmstart_path: str = None, re
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train multimodal MC retrieval model")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument(
         "--pretrained",
         type=str,
@@ -345,13 +522,14 @@ if __name__ == "__main__":
 
     cfg = load_config(args.config)
     
-    # Print active plan info if pointbert
-    if cfg["model"].get("encoder_type") == "pointbert":
+    enc_type = cfg["model"].get("encoder_type", "cnn")
+    if enc_type in ("pointbert", "trimodal"):
         is_frozen = cfg.get("pointbert", {}).get("freeze_backbone", True)
-        plan_label = "❄️  Plan 2 — Feature Extraction (Frozen Backbone)" if is_frozen \
-                else "🔥  Plan 1 — Full Fine-Tuning (Trainable Backbone)"
+        plan_label = "Plan 2 — Feature Extraction (Frozen Backbone)" if is_frozen \
+                else "Plan 1 — Full Fine-Tuning (Trainable Backbone)"
+        mode_label = f"TRIMODAL | {plan_label}" if enc_type == "trimodal" else plan_label
         print(f"\n{'='*60}")
-        print(f"  {plan_label}")
+        print(f"  {mode_label}")
         print(f"{'='*60}")
         
     train(cfg, pretrained_path=args.pretrained, warmstart_path=args.warmstart, resume_path=args.resume)

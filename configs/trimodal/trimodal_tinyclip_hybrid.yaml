@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Trimodal Setup Config — Voxel + TinyCLIP (Image & Text) with Hybrid Pretraining
+# ─────────────────────────────────────────────────────────────────────────────
+
+data:
+  parquet_path: "data/data_merged_with_text.parquet"
+  num_views: 4               # Number of views to pool
+  use_cached_clip: true      # Load precomputed embeddings instead of live images
+  max_block_types: 256
+  text_max_length: 256
+  crop_bbox: true
+  augment: true
+  aug_apply_prob: 0.5
+  aug_dropout_prob: 0.05
+  val_split: 0.1
+  test_split: 0.1
+  seed: 42
+
+model:
+  trimodal_variant: "tinyclip"  # spunn scheme: open_clip TinyCLIP + NTXent loss
+  encoder_type: "cnn"        # Or "pointbert" to use the Point-BERT voxel branch
+  use_trimodal: true         # (back-compat) enable trimodal forward pass + image loading
+  semantic_init: true        # Enable semantic warm-start initialization using TinyCLIP
+  embed_dim: 256             # Shared embedding space dim
+  
+  # Voxel CNN branch params
+  block_embed_dim: 64
+  voxel_channels: [128, 256, 512]
+  dropout: 0.1
+  
+  # TinyCLIP for text and image branches
+  tinyclip_arch: "TinyCLIP-auto-ViT-45M-32-Text-18M"
+  tinyclip_pretrained: "LAIONYFCC400M"
+  freeze_tinyclip: true      # Freeze TinyCLIP weights to save VRAM and avoid overfitting
+
+training:
+  batch_size: 128
+  epochs: 100
+  weight_decay: 1.0e-2
+
+  # Learning rates
+  lr_voxel: 1.0e-4           # Voxel branch
+  lr_text_proj: 1.0e-4       # TinyCLIP to embed_dim projection
+  lr_tinyclip: 1.0e-5        # If unfreezing TinyCLIP
+
+  temperature_init: 0.07
+  warmup_ratio: 0.05
+  early_stopping_patience: 20
+  num_workers: 4
+  checkpoint_dir: "checkpoints/trimodal_tinyclip_hybrid"
+
+  # Mixed Precision (AMP)
+  use_amp: true
+
+eval:
+  recall_k: [1, 5, 10]
+  batch_size: 128
+
+pretraining:
+  mode: "hybrid"
+  mvm_weight: 1.0
+  simclr_weight: 1.0
+  mask_ratio: 0.2
+  augment: true
+  epochs: 200
+  batch_size: 128
+  lr: 1.0e-3
+  checkpoint_dir: "checkpoints/trimodal_tinyclip_hybrid_pretrained"

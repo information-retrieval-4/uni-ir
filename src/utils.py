@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 
-def load_config(path: str = "configs/cnn_default.yaml") -> dict:
+def load_config(path: str = "configs/cnn/cnn_default.yaml") -> dict:
     """Load YAML config and return as nested dict."""
     with open(path, "r") as f:
         cfg = yaml.safe_load(f)

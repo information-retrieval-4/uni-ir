@@ -374,7 +374,12 @@ class SchematicDataset(Dataset):
         use_material_context: bool = False,
         top_k_materials: int = 5,
         text_column: str = None,
+        image_preprocess = None,
+        num_views: int = 1,
+        clip_cache_path: str = None,
+        load_voxels: bool = True,
     ):
+        self.load_voxels = load_voxels
         # Build text — priority: text_column > material_context > default
         if text_column and text_column in df.columns:
             self.texts = df[text_column].fillna("").tolist()
@@ -400,19 +405,85 @@ class SchematicDataset(Dataset):
         self.augment = augment
         self.aug_apply_prob = aug_apply_prob
         self.aug_dropout_prob = aug_dropout_prob
+        
+        self.image_preprocess = image_preprocess
+        self.num_views = num_views
+        self.image_paths_list = []
+        
+        self.cached_embeddings = None
+        if clip_cache_path and __import__("os").path.exists(clip_cache_path):
+            self.cached_embeddings = __import__("torch").load(clip_cache_path)
+            
+        if self.cached_embeddings is None:
+            for i in range(12):
+                col = f"view_{i:02d}_path"
+                if col in df.columns:
+                    self.image_paths_list.append(df[col].tolist())
+                
+        self.image_root = None
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
         text = self.texts[idx]
-        voxel = self._remap_fn(
-            self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox
-        )
-        if self.augment:
-            voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
+        if getattr(self, "load_voxels", True):
+            voxel = self._remap_fn(
+                self.voxels[idx], self.block_mapping, crop_bbox=self.crop_bbox
+            )
+            if self.augment:
+                voxel = augment_voxel(voxel, self.aug_apply_prob, self.aug_dropout_prob)
+        else:
+            voxel = torch.zeros(1)
+            
+            
+        if self.cached_embeddings is not None:
+            return text, voxel, self.cached_embeddings[idx], self.categories[idx]
+            
+        if self.image_paths_list and self.image_preprocess is not None:
+            import os
+            import glob
+            from PIL import Image
+            
+            total_available = len(self.image_paths_list)
+            if self.num_views == 1:
+                indices = [0]
+            else:
+                indices = np.round(np.linspace(0, total_available - 1, self.num_views)).astype(int)
+                
+            images_out = []
+            for view_idx in indices:
+                view_path = str(self.image_paths_list[view_idx][idx])
+                
+                if self.image_root is None:
+                    parts = view_path.split("/")
+                    pattern = f"**/*{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else f"**/{view_path}"
+                    matches = glob.glob(pattern, recursive=True)
+                    if matches:
+                        matched_path = matches[0].replace('\\', '/')
+                        self.image_root = matched_path[:matched_path.rfind(view_path)]
+                    else:
+                        self.image_root = ""
+                        
+                if self.image_root:
+                    full_path = os.path.join(self.image_root, view_path)
+                else:
+                    full_path = view_path
+                    
+                try:
+                    img = Image.open(full_path).convert('RGB')
+                    images_out.append(self.image_preprocess(img))
+                except Exception:
+                    images_out.append(torch.zeros(3, 224, 224))
+                    
+            if self.num_views > 1:
+                image_tensor = torch.stack(images_out)
+            else:
+                image_tensor = images_out[0]
+                
+            return text, voxel, image_tensor, self.categories[idx]
+            
         return text, voxel, self.categories[idx]
-
 
 # ---------------------------------------------------------------------------
 # DataLoader factory
@@ -421,6 +492,8 @@ class SchematicDataset(Dataset):
 def create_dataloaders(
     cfg: dict,
     parquet_path: Optional[str] = None,
+    image_preprocess = None,
+    load_voxels: bool = True,
 ):
     """Load data, preprocess, split, and return train/val/test DataLoaders.
 
@@ -448,6 +521,15 @@ def create_dataloaders(
     available_cols = set(pq.ParquetFile(path).schema_arrow.names)
 
     base_cols = {"subtitle", "title", "description", "tags"}
+    
+    use_trimodal = cfg.get("model", {}).get("use_trimodal", False)
+    num_views = cfg.get("data", {}).get("num_views", 1)
+    
+    if use_trimodal:
+        for i in range(12):
+            col = f"view_{i:02d}_path"
+            if col in available_cols:
+                base_cols.add(col)
 
     if use_name_vocab and "voxel_name_data" in available_cols:
         base_cols.add("voxel_name_data")
@@ -536,28 +618,43 @@ def create_dataloaders(
         use_name_vocab       = use_name_vocab,
         use_material_context = use_material_context,
         top_k_materials      = top_k_materials,
+        image_preprocess     = image_preprocess,
+        num_views            = num_views if use_trimodal else 1,
+        load_voxels          = load_voxels,
     )
+    
+    use_cached_clip = data_cfg.get("use_cached_clip", False)
 
     ds_train = SchematicDataset(
         df.iloc[idx_train].reset_index(drop=True),
         augment=augment, aug_apply_prob=aug_apply_prob,
-        aug_dropout_prob=aug_dropout_prob, text_column=train_text_col, **base_kwargs,
+        aug_dropout_prob=aug_dropout_prob, text_column=train_text_col, 
+        clip_cache_path="data/clip_cache/train.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
     ds_val  = SchematicDataset(
         df.iloc[idx_val].reset_index(drop=True),
-        augment=False, text_column=val_text_col, **base_kwargs,
+        augment=False, text_column=val_text_col, 
+        clip_cache_path="data/clip_cache/val.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
     ds_test = SchematicDataset(
         df.iloc[idx_test].reset_index(drop=True),
-        augment=False, text_column=val_text_col, **base_kwargs,
+        augment=False, text_column=val_text_col, 
+        clip_cache_path="data/clip_cache/test.pt" if use_cached_clip else None,
+        **base_kwargs,
     )
 
     # --- loaders ------------------------------------------------------------
     train_cfg = cfg["training"]
 
     def collate_fn(batch):
-        texts, voxels, categories = zip(*batch)
-        return list(texts), torch.stack(voxels), list(categories)
+        if len(batch[0]) == 4:
+            texts, voxels, images, categories = zip(*batch)
+            return list(texts), torch.stack(voxels), torch.stack(images), list(categories)
+        else:
+            texts, voxels, categories = zip(*batch)
+            return list(texts), torch.stack(voxels), list(categories)
 
     train_loader = DataLoader(
         ds_train,

@@ -3,7 +3,7 @@
 Usage:
   python src/export_texts.py --parquet data/data_with_voxel_names_multiview_image.parquet
   python src/export_texts.py --parquet data/data_with_voxel_names_multiview_image.parquet --max_rows 50
-  python src/export_texts.py --config configs/pb_s1s2_semantic_init.yaml
+  python src/export_texts.py --config configs/pointbert/pb_s1s2_semantic_init.yaml
 """
 
 import argparse

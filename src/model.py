@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from timm.layers import DropPath, trunc_normal_
+import open_clip
 
 
 def apply_semantic_init(
@@ -879,3 +880,196 @@ class DualEncoder(nn.Module):
                     "name": "text_proj",
                 },
             ]
+
+class TrimodalEncoder(nn.Module):
+    """Trimodal encoder wrapping image, text (from TinyCLIP), and voxel branches."""
+
+    def __init__(self, cfg: dict, num_block_types: int):
+        super().__init__()
+        model_cfg = cfg["model"]
+        dropout = model_cfg.get("dropout", 0.3)
+        self.encoder_type = model_cfg.get("encoder_type", "cnn")
+        self.embed_dim = model_cfg["embed_dim"]
+
+        # 1. Voxel Encoder
+        if self.encoder_type == "pointbert":
+            pb_cfg = cfg.get("pointbert", {})
+            self.voxel_encoder = MinecraftPointBERTEncoder(
+                num_points=pb_cfg.get("num_points", 512),
+                block_vocab_size=num_block_types,
+                block_embed_dim=pb_cfg.get("block_embed_dim", 64),
+                trans_dim=pb_cfg.get("trans_dim", 384),
+                depth=pb_cfg.get("depth", 12),
+                num_heads=pb_cfg.get("num_heads", 6),
+                mlp_ratio=pb_cfg.get("mlp_ratio", 4.0),
+                drop_path=pb_cfg.get("drop_path", 0.1),
+                embed_dim=self.embed_dim,
+                dropout=pb_cfg.get("dropout", 0.1),
+                freeze_backbone=pb_cfg.get("freeze_backbone", True),
+                pretrained_path=pb_cfg.get("pretrained_path", None),
+                pretrained_type=pb_cfg.get("pretrained_type", "vanilla"),
+                use_fps_eval=pb_cfg.get("use_fps_eval", True),
+            )
+        else:
+            self.voxel_encoder = VoxelEncoder(
+                num_block_types=num_block_types,
+                block_embed_dim=model_cfg["block_embed_dim"],
+                channels=model_cfg["voxel_channels"],
+                embed_dim=self.embed_dim,
+                dropout=dropout,
+                use_learned_stem=model_cfg.get("use_learned_stem", False),
+                use_depthwise_separable=model_cfg.get("use_depthwise_separable", False),
+            )
+
+        # 2. Image and Text Encoders (from TinyCLIP)
+        arch = model_cfg.get("tinyclip_arch", "TinyCLIP-auto-ViT-45M-32-Text-18M")
+        pretrained = model_cfg.get("tinyclip_pretrained", "LAIONYFCC400M")
+        print(f"[TrimodalEncoder] Loading TinyCLIP: {arch} ({pretrained})")
+        
+        self.arch = arch
+        self.clip_model, _, self.preprocess = open_clip.create_model_and_transforms(arch, pretrained=pretrained)
+        self.tokenizer = open_clip.get_tokenizer(arch)
+        
+        freeze_tinyclip = model_cfg.get("freeze_tinyclip", True)
+        if freeze_tinyclip:
+            for param in self.clip_model.parameters():
+                param.requires_grad = False
+                
+        # 3. Projection to embed_dim (e.g. 256)
+        if hasattr(self.clip_model, "text_projection") and self.clip_model.text_projection is not None:
+            clip_embed_dim = self.clip_model.text_projection.shape[1]
+        elif hasattr(self.clip_model.visual, "output_dim"):
+            clip_embed_dim = self.clip_model.visual.output_dim
+        else:
+            clip_embed_dim = 512
+            
+        self.clip_proj = nn.Linear(clip_embed_dim, self.embed_dim)
+
+    def encode_voxel(self, voxels: torch.LongTensor) -> torch.Tensor:
+        """Encode voxels and L2-normalise."""
+        emb = self.voxel_encoder(voxels)
+        return nn.functional.normalize(emb, dim=-1)
+
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        """Encode text using TinyCLIP, project, and L2-normalise."""
+        tokens = self.tokenizer(texts).to(next(self.clip_model.parameters()).device)
+        requires_grad = any(p.requires_grad for p in self.clip_model.parameters())
+        with torch.set_grad_enabled(requires_grad):
+            emb = self.clip_model.encode_text(tokens)
+            
+        emb = self.clip_proj(emb.to(self.clip_proj.weight.dtype))
+        return nn.functional.normalize(emb, dim=-1)
+
+    def encode_image(self, images: torch.Tensor) -> torch.Tensor:
+        """Encode image using TinyCLIP, project, and L2-normalise. Supports multi-view & cached."""
+        is_cached = images.ndim == 2
+        
+        if is_cached:
+            emb = images
+        else:
+            is_multiview = images.ndim == 5
+            if is_multiview:
+                B, V, C, H, W = images.shape
+                images = images.view(B * V, C, H, W)
+                
+            requires_grad = any(p.requires_grad for p in self.clip_model.parameters())
+            with torch.set_grad_enabled(requires_grad):
+                emb = self.clip_model.encode_image(images.to(next(self.clip_model.parameters()).dtype))
+                
+            if is_multiview:
+                emb = emb.view(B, V, -1).mean(dim=1)
+                
+        emb = self.clip_proj(emb.to(self.clip_proj.weight.dtype))
+        return nn.functional.normalize(emb, dim=-1)
+
+    def forward(self, texts: list[str], voxels: torch.LongTensor, images: torch.Tensor = None):
+        """
+        Returns:
+            text_emb: (B, embed_dim) normalised
+            voxel_emb: (B, embed_dim) normalised
+            image_emb: (B, embed_dim) normalised (if images is provided)
+        """
+        text_emb = self.encode_text(texts)
+        voxel_emb = self.encode_voxel(voxels)
+        
+        if images is not None:
+            image_emb = self.encode_image(images)
+            return text_emb, voxel_emb, image_emb
+            
+        return text_emb, voxel_emb
+
+    def get_param_groups(self, cfg: dict) -> list:
+        """Return parameter groups with custom learning rates if configured."""
+        tr_cfg = cfg["training"]
+
+        groups = []
+        
+        groups.append({
+            "params": list(self.clip_proj.parameters()),
+            "lr": tr_cfg.get("lr_text_proj", 1e-4),
+            "name": "clip_proj",
+        })
+        
+        if self.encoder_type == "pointbert":
+            pb_cfg = cfg.get("pointbert", {})
+            lr_adapter = tr_cfg.get("lr_adapter", 3e-4)
+            lr_head = tr_cfg.get("lr_head", 1e-4)
+            lr_backbone = tr_cfg.get("lr_backbone", 5e-6)
+
+            ve = self.voxel_encoder
+            groups.extend([
+                {
+                    "params": list(ve.block_embedding.parameters()),
+                    "lr": lr_adapter,
+                    "name": "block_embed",
+                },
+                {
+                    "params": list(ve.input_projection.parameters()),
+                    "lr": lr_adapter,
+                    "name": "input_proj",
+                },
+                {
+                    "params": [ve.backbone.cls_token, ve.backbone.cls_pos],
+                    "lr": lr_adapter,
+                    "name": "cls_tokens",
+                },
+                {
+                    "params": list(ve.backbone.pos_embed.parameters()),
+                    "lr": lr_adapter,
+                    "name": "pos_embed",
+                },
+                {
+                    "params": list(ve.output_head.parameters()),
+                    "lr": lr_head,
+                    "name": "output_head",
+                },
+            ])
+
+            if not pb_cfg.get("freeze_backbone", True):
+                groups.extend([
+                    {
+                        "params": list(ve.backbone.blocks.parameters()),
+                        "lr": lr_backbone,
+                        "name": "transformer_blocks",
+                    },
+                    {
+                        "params": list(ve.backbone.norm.parameters()),
+                        "lr": lr_backbone,
+                        "name": "transformer_norm",
+                    }
+                ])
+        else:
+            groups.append({
+                "params": list(self.voxel_encoder.parameters()),
+                "lr": tr_cfg.get("lr_voxel", 1e-4),
+                "name": "voxel_encoder",
+            })
+            
+        if not cfg["model"].get("freeze_tinyclip", True):
+            groups.append({
+                "params": list(self.clip_model.parameters()),
+                "lr": tr_cfg.get("lr_tinyclip", 1e-5),
+                "name": "tinyclip",
+            })
+
+        return groups

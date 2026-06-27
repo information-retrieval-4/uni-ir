@@ -49,6 +49,51 @@ class CLIPLoss(nn.Module):
         return (loss_t2v + loss_v2t) / 2.0
 
 
+class TriModalCLIPLoss(nn.Module):
+    """Symmetric InfoNCE loss on three modality pairs: TI, TV, IV.
+
+    L = λ_TI * L(T,I) + λ_TV * L(T,V) + λ_IV * L(I,V)
+    """
+
+    def __init__(
+        self,
+        temperature_init: float = 0.07,
+        lambda_ti: float = 1.0,
+        lambda_tv: float = 1.0,
+        lambda_iv: float = 1.0,
+    ):
+        super().__init__()
+        self.log_temp = nn.Parameter(torch.tensor(temperature_init).log())
+        self.lambda_ti = lambda_ti
+        self.lambda_tv = lambda_tv
+        self.lambda_iv = lambda_iv
+
+    @property
+    def temperature(self) -> torch.Tensor:
+        return self.log_temp.exp().clamp(min=0.01, max=1.0)
+
+    def _infonce(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        logits = (a @ b.T) / self.temperature
+        labels = torch.arange(len(logits), device=logits.device)
+        return (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2.0
+
+    def forward(
+        self,
+        text_emb: torch.Tensor,
+        image_emb: torch.Tensor,
+        voxel_emb: torch.Tensor,
+    ):
+        l_ti = self._infonce(text_emb, image_emb)
+        l_tv = self._infonce(text_emb, voxel_emb)
+        l_iv = self._infonce(image_emb, voxel_emb)
+        total = self.lambda_ti * l_ti + self.lambda_tv * l_tv + self.lambda_iv * l_iv
+        return total, {
+            "loss_TI": l_ti.item(),
+            "loss_TV": l_tv.item(),
+            "loss_IV": l_iv.item(),
+        }
+
+
 class SimCLRLoss(nn.Module):
     """NT-Xent loss for SimCLR."""
     def __init__(self, temperature_init: float = 0.1):
@@ -79,4 +124,77 @@ class SimCLRLoss(nn.Module):
         sim.masked_fill_(mask, -float("inf"))
         
         loss = F.cross_entropy(sim, labels)
+        return loss
+
+class NTXentLoss(nn.Module):
+    """
+    This NTXentLoss implementation is adapted from TriCoLo:
+    https://github.com/edreisMD/ConVIRT-pytorch/blob/master/loss/nt_xent.py
+    """
+    def __init__(self, temperature=0.07, alpha_weight=0.5):
+        super().__init__()
+        self.temperature = temperature
+        self.alpha_weight = alpha_weight
+
+    def _softXEnt(self, target, logits):
+        logprobs = F.log_softmax(logits, dim=1)
+        loss = -(target * logprobs).sum() / logits.shape[0]
+        return loss
+
+    def forward(self, zis, zjs, norm=True):
+        if norm:
+            zis = F.normalize(zis, p=2, dim=1)
+            zjs = F.normalize(zjs, p=2, dim=1)
+
+        batch_size = zis.shape[0]
+        labels = torch.eye(batch_size, device=zis.device, dtype=torch.float32)
+
+        logits_ab = torch.matmul(zis, torch.transpose(zjs, 0, 1)) / self.temperature
+        logits_ba = torch.matmul(zjs, torch.transpose(zis, 0, 1)) / self.temperature
+
+        loss_a = self._softXEnt(labels, logits_ab)
+        loss_b = self._softXEnt(labels, logits_ba)
+
+        return self.alpha_weight * loss_a + (1 - self.alpha_weight) * loss_b
+
+class TripletLoss(nn.Module):
+    def __init__(self, margin=0.2):
+        super(TripletLoss, self).__init__()
+        self.margin = margin
+
+    def _pairwise_distances(self, zis, zls, squared=False):
+        dot_product = torch.matmul(zls, zis.t())
+        a_square_norm = torch.diag(torch.matmul(zls, zls.t()))
+        b_square_norm = torch.diag(torch.matmul(zis, zis.t()))
+        distances = a_square_norm.unsqueeze(0) - 2.0 * dot_product + b_square_norm.unsqueeze(1)
+        distances[distances < 0] = 0
+        if not squared:
+            mask = distances.eq(0).float()
+            distances = distances + mask * 1e-16
+            distances = (1.0 - mask) * torch.sqrt(distances)
+        return distances
+
+    def forward(self, zis, zls):
+        batch_size = zis.shape[0]
+        distances = self._pairwise_distances(zis, zls)
+        loss_list = []
+        for i in range(batch_size):
+            for j in range(batch_size):
+                if i == j:
+                    continue
+                if distances[i][i] < distances[i][j] < distances[i][i] + self.margin:  # semi-hard
+                    loss_list.append(distances[i][i] - distances[i][j] + self.margin)
+
+        if len(loss_list) == 0:  # margin is set to a too small value
+            for i in range(batch_size):
+                for j in range(batch_size):
+                    if i == j:
+                        continue
+                    if distances[i][j] < distances[i][i]:  # hard
+                        loss_list.append(distances[i][i] - distances[i][j] + self.margin)
+
+        if len(loss_list) == 0:
+            return torch.tensor(0.0, device=zis.device)
+
+        loss = sum(loss_list) / len(loss_list)
         return loss

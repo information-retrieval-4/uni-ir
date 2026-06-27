@@ -107,7 +107,7 @@ def probe_reconstruction(model, loader, device, mask_ratios=[0.1, 0.2, 0.3, 0.5,
 
 def main():
     parser = argparse.ArgumentParser(description="Probe MVM reconstruction")
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/pretrained_voxel.pt")
     args = parser.parse_args()
 

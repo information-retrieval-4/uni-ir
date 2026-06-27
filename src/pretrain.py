@@ -362,12 +362,30 @@ def pretrain(cfg: dict):
         # mask token gets an arbitrary string "mask token"
         block_names.append("mask token")
 
-        temp_text_encoder = TextEncoder(
-            model_name=model_cfg["text_model"],
-            text_hidden_dim=model_cfg["text_hidden_dim"],
-            embed_dim=model_cfg["embed_dim"],
-            freeze=True,
-        ).to(device)
+        if model_cfg.get("use_trimodal", False):
+            import open_clip
+            arch = model_cfg.get("tinyclip_arch", "TinyCLIP-auto-ViT-45M-32-Text-18M")
+            pretrained = model_cfg.get("tinyclip_pretrained", "LAIONYFCC400M")
+            print(f"Loading TinyCLIP for semantic init: {arch} ({pretrained})")
+            clip_model, _, _ = open_clip.create_model_and_transforms(arch, pretrained=pretrained)
+            tokenizer = open_clip.get_tokenizer(arch)
+            clip_model = clip_model.to(device)
+
+            class TinyCLIPWrapper:
+                def encode_text(self, texts):
+                    tokens = tokenizer(texts).to(device)
+                    with torch.no_grad():
+                        emb = clip_model.encode_text(tokens)
+                    return emb
+
+            temp_text_encoder = TinyCLIPWrapper()
+        else:
+            temp_text_encoder = TextEncoder(
+                model_name=model_cfg["text_model"],
+                text_hidden_dim=model_cfg["text_hidden_dim"],
+                embed_dim=model_cfg["embed_dim"],
+                freeze=True,
+            ).to(device)
 
         apply_semantic_init(
             voxel_embedding_layer=model.block_embedding,
@@ -376,7 +394,13 @@ def pretrain(cfg: dict):
             block_embed_dim=model_cfg["block_embed_dim"],
             device=device,
         )
-        del temp_text_encoder
+        
+        if model_cfg.get("use_trimodal", False):
+            del clip_model
+            del tokenizer
+            del temp_text_encoder
+        else:
+            del temp_text_encoder
         torch.cuda.empty_cache()
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -536,7 +560,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Pretrain voxel encoder via masked voxel modeling"
     )
-    parser.add_argument("--config", type=str, default="configs/cnn_default.yaml")
+    parser.add_argument("--config", type=str, default="configs/cnn/cnn_default.yaml")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
